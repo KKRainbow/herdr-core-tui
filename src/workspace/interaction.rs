@@ -818,6 +818,7 @@ impl Workspace {
         self.overlay = Some(Overlay::WorktreeCreate(WorktreeCreate {
             repository,
             branch: TextEditor::new(&branch, false),
+            new_branch: true,
             checkout_path,
             creating: false,
             error: None,
@@ -901,8 +902,7 @@ impl Workspace {
             self.overlay = Some(Overlay::WorktreeCreate(create));
             return;
         }
-        let args =
-            json!({"repository":create.repository,"branch":branch,"path":create.checkout_path});
+        let args = json!({"repository":create.repository,"branch":branch,"path":create.checkout_path,"new_branch":create.new_branch});
         match self.command("worktree.new", args).await {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
@@ -1082,6 +1082,11 @@ impl Workspace {
             Overlay::WorktreeCreate(mut create) => match key.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter if !create.creating => self.submit_worktree_create(create).await,
+                KeyCode::Tab | KeyCode::BackTab if !create.creating => {
+                    create.new_branch = !create.new_branch;
+                    create.error = None;
+                    self.overlay = Some(Overlay::WorktreeCreate(create));
+                }
                 _ => {
                     if create.branch.handle_key(&key).is_some() {
                         self.overlay = Some(Overlay::WorktreeCreate(create));
@@ -2248,6 +2253,8 @@ impl Workspace {
             .find(|(r, _)| contains(*r, x, y))
             .map(|(_, i)| *i);
         let worktree_search = contains(render.worktree_search, x, y);
+        let new_branch = contains(render.worktree_new_branch, x, y);
+        let existing_branch = contains(render.worktree_existing_branch, x, y);
         let pane_destination = render
             .pane_move_rows
             .iter()
@@ -2346,10 +2353,14 @@ impl Workspace {
                 }
                 self.overlay = Some(Overlay::Navigator(navigator));
             }
-            Overlay::WorktreeCreate(create) => {
+            Overlay::WorktreeCreate(mut create) => {
                 if left && primary && !create.creating {
                     self.submit_worktree_create(create).await;
                 } else if !(left && cancel) {
+                    if left && !create.creating && (new_branch || existing_branch) {
+                        create.new_branch = new_branch;
+                        create.error = None;
+                    }
                     self.overlay = Some(Overlay::WorktreeCreate(create));
                 }
             }

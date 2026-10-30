@@ -60,6 +60,7 @@ Drag spaces and tabs to reorder them; a main checkout moves with its linked work
 Click `new` for a workspace, `menu` for keybinds, reload, and detach, and `+` for a tab.
 Right-click a space, tab, or pane for its menu.
 Space menus offer worktree creation, opening, and removal in Git repositories.
+In the new worktree dialog, select `new branch` or `existing branch` with Tab or the mouse.
 Pane menus also park the terminal without ending it.
 Right-click an agent without a pane to keep it in a new tab.
 Shift+right-click sends the click to the program.

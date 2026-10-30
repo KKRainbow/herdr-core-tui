@@ -411,6 +411,7 @@ pub fn navigator_selected_index(rows: &[NavRow], navigator: &Navigator) -> Optio
 pub struct WorktreeCreate {
     pub repository: String,
     pub branch: TextEditor,
+    pub new_branch: bool,
     pub checkout_path: String,
     pub creating: bool,
     pub error: Option<String>,
@@ -525,6 +526,8 @@ pub struct OverlayRender {
     pub navigator_search: Rect,
     pub worktree_search: Rect,
     pub worktree_rows: Vec<(Rect, usize)>,
+    pub worktree_new_branch: Rect,
+    pub worktree_existing_branch: Rect,
     pub pane_move_rows: Vec<(Rect, String)>,
     pub help_max_scroll: usize,
     pub cursor: Option<Position>,
@@ -1388,8 +1391,39 @@ fn render_worktree_create(
     let q = popup(b.area, 68, 12)?;
     let i = panel(b, q, p.accent, p.panel_bg)?;
     put_text(b, i.x, i.y, i.width, "new worktree", title_style(p));
+    let modes = row(i, &[14, 19], 2, 1);
+    let [new_branch, existing_branch] = modes.as_slice() else {
+        return None;
+    };
+    button(
+        b,
+        *new_branch,
+        " new branch ",
+        if c.new_branch {
+            primary_style(p)
+        } else {
+            secondary_style(p)
+        },
+    );
+    button(
+        b,
+        *existing_branch,
+        " existing branch ",
+        if c.new_branch {
+            secondary_style(p)
+        } else {
+            primary_style(p)
+        },
+    );
     let label = Style::default().fg(p.overlay0).bg(p.panel_bg);
-    put_text(b, i.x, i.y + 2, i.width, " branch", label);
+    put_text(
+        b,
+        i.x,
+        i.y + 2,
+        i.width,
+        " branch name · tab switches new/existing",
+        label,
+    );
     let input = Rect::new(i.x, i.y + 3, i.width, 1);
     b.set_style(input, Style::default().fg(p.text).bg(p.surface0));
     let cursor = render_editor(
@@ -1426,6 +1460,8 @@ fn render_worktree_create(
         area: q,
         primary: *primary,
         cancel: *cancel,
+        worktree_new_branch: *new_branch,
+        worktree_existing_branch: *existing_branch,
         cursor: cursor.filter(|_| !c.creating),
         ..OverlayRender::default()
     })

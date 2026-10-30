@@ -104,6 +104,31 @@ impl Workspace {
     fn document(&self) -> Option<herdr_client_lib::document::Document> {
         self.session.document(&self.machine).ok()
     }
+    async fn recover_placements(&mut self) -> bool {
+        let outcomes = self.session.reconcile_placements().await;
+        if outcomes.is_empty() {
+            return false;
+        }
+        let errors = outcomes
+            .iter()
+            .filter_map(|outcome| {
+                use herdr_client_lib::sync::WriteOutcome;
+                let error = match &outcome.result {
+                    Ok(WriteOutcome::Written) => return None,
+                    Ok(WriteOutcome::Conflict) => "workspace changed during recovery".into(),
+                    Ok(WriteOutcome::Unavailable(error)) => error.clone(),
+                    Err(error) => error.to_string(),
+                };
+                Some(format!("{}: {error}", outcome.terminal))
+            })
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            self.notice = format!("Recovery failed: {}", errors.join("; "));
+        }
+        self.reconcile();
+        true
+    }
+
     fn reconcile(&mut self) {
         let active = self
             .active_id()
@@ -725,7 +750,7 @@ pub async fn run(
     if !app.session.documents.contains_key(&app.machine) {
         app.session.refresh(&app.machine).await;
     }
-    app.session.reconcile_placements().await?;
+    app.recover_placements().await;
     app.reconcile();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -880,14 +905,7 @@ pub async fn run(
             }
             Next::Retry => {
                 if connected {
-                    match app.session.reconcile_placements().await {
-                        Ok(outcomes) if !outcomes.is_empty() => {
-                            app.reconcile();
-                            dirty = true;
-                        }
-                        Err(e) => app.notice = e.to_string(),
-                        _ => {}
-                    }
+                    dirty |= app.recover_placements().await;
                 }
                 if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
                     match app.refresh_identities().await {

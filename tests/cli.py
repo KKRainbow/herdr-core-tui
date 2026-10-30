@@ -11,14 +11,30 @@ with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
   labels=first["terminal"]["labels"];space=labels["herdr.space"];tab1=labels["herdr.tab"]
   second=cli("do","tab.new",json.dumps({"space":space,"name":"Second","argv":["sh","-c","sleep 180"]}))
   tab2=second["terminal"]["labels"]["herdr.tab"]
+  def orphan(space_label, tab_label):
+   return json.loads(subprocess.check_output(["hc","run","--json","--bg","--no-parent","--label","herdr.space="+space_label,"--label","herdr.tab="+tab_label,"sh","-c","sleep 180"],env=env,timeout=10))
+  bad=orphan("invalid-space",tab1)
+  good=orphan(space,"recovered-tab")
   for name in ["one","two"]:
    master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",24,100,0,0));original=termios.tcgetattr(slave)
    process=subprocess.Popen([str(binary),"--session",env["HC_SESSION"],"--instance",name],env=env,cwd=root,stdin=slave,stdout=slave,stderr=slave)
    viewers.append((name,process,master,slave,original))
    end=time.monotonic()+10;data=b""
-   while b"Instance" not in data and time.monotonic()<end:
+   while b"Duplicate" not in data and time.monotonic()<end:
     if select.select([master],[],[],.1)[0]:data+=os.read(master,65536)
-   assert b"Instance" in data,data[-1000:]
+   assert b"Recovery" in data and b"failed:" in data and b"Duplicate" in data,data[-2000:]
+   assert bad["address"].encode() in data,data[-1000:]
+  for name in ["one","two"]:
+   state=cli("--instance",name,"view","state")
+   assert state["document_available"] and state["view"]["active_space"]==space,state
+   assert bad["address"] in state["notice"] and "Duplicate" in state["notice"],state
+  assert cli("--instance","one","view","tab.focus",json.dumps({"id":"recovered-tab"}))["ok"]
+  end=time.monotonic()+5
+  while True:
+   recovered=cli("--instance","one","view","state")
+   if any(p["terminal"]==good["address"] for p in recovered["panes"]) or time.monotonic()>=end:break
+   time.sleep(.02)
+  assert any(p["terminal"]==good["address"] for p in recovered["panes"]),recovered
   assert len(cli("instances")["instances"])==2
   assert cli("--instance","one","view","tab.focus",json.dumps({"id":tab2}))["ok"]
   assert cli("--instance","one","view","zoom")["ok"]
@@ -40,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
   assert cli("instances")["instances"]==[]
   record=json.loads(subprocess.check_output(["hc","get",first["terminal"]["address"]],env=env))
   assert record["state"]=="live"
-  print("PASS: headless structure, standalone binary, two independent views, explicit targeting, endpoint cleanup, handled-error restoration, surviving terminals")
+  print("PASS: mixed orphan recovery and visible errors, headless structure, standalone binary, two independent views, explicit targeting, endpoint cleanup, handled-error restoration, surviving terminals")
  finally:
   for _,process,master,slave,_ in viewers:
    if process.poll()is None:process.kill();process.wait()

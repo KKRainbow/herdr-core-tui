@@ -53,21 +53,13 @@ impl Connection {
         if event["terminal"] != self.address {
             return Ok(false);
         }
+        let mut records =
+            std::collections::BTreeMap::from([(self.address.clone(), self.record.take())]);
+        herdr_client_lib::sync::reduce(&mut records, event);
+        self.record = records.remove(&self.address).unwrap_or(Value::Null);
         if event["type"] == "restarted" {
-            self.record = event["data"].clone();
             self.stream = None;
             return Ok(true);
-        }
-        if let Some(fields) = event["data"].as_object() {
-            for (key, value) in fields {
-                self.record[key] = value.clone();
-            }
-        }
-        if event["type"] == "finished" {
-            self.record["state"] = json!("finished");
-        }
-        if event["type"] == "lost" {
-            self.record["pid"] = Value::Null;
         }
         Ok(event["type"] == "size")
     }

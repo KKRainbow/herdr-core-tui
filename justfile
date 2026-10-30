@@ -15,6 +15,10 @@ build:
 
 integration: build
     python3 tests/integration_pty.py
+    python3 tests/group_close.py
+    python3 tests/git_polling.py
+    python3 tests/pane_move.py
+    python3 tests/worktree_create.py
 
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored

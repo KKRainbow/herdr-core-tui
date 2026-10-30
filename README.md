@@ -112,7 +112,9 @@ Native macOS is unvalidated; Windows also needs a native local control transport
 ## Checks
 
 `just check` runs fast behavior tests, formatting, and lint.
-`just integration` uses `hc` and an isolated scratch core for PTY checks.
+`just integration` requires `hc`, Git, and Python 3; each test uses an isolated scratch core.
+It runs PTY lifecycle checks (`integration_pty.py`) and regressions for group close (`group_close.py`), Git polling (`git_polling.py`), pane moves (`pane_move.py`), and worktree creation (`worktree_create.py`).
+The worktree test creates and removes default checkout paths under `~/.herdr/worktrees` with a unique test repository name.
 `just workflows-integration` requires `HC_TUI_TEST_ROOT` under `/tmp` for Git and workspace workflows.
 `just app-integration` requires an isolated running app fixture, `TUI_APP_TEST_ROOT`, `TUI_APP_TEST_TERMINAL`, and `HC_SESSION`.
 Do not point integration tests at live work.

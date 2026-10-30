@@ -115,6 +115,25 @@ fn base(variable: &str, fallback: &str) -> PathBuf {
 pub fn config_path() -> PathBuf {
     base("XDG_CONFIG_HOME", ".config").join("config.json")
 }
+/// Sets one setting in the config file, keeping everything else the person wrote,
+/// as Herdr's settings write a single edit.
+pub fn edit(path: &[&str], value: serde_json::Value) -> Result<()> {
+    let file = config_path();
+    let mut config: serde_json::Value = match std::fs::read(&file) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e.into()),
+    };
+    let mut node = &mut config;
+    for key in &path[..path.len() - 1] {
+        if !node[*key].is_object() {
+            node[*key] = serde_json::json!({});
+        }
+        node = &mut node[*key];
+    }
+    node[path[path.len() - 1]] = value;
+    write_atomic(&file, &serde_json::to_vec_pretty(&config)?)
+}
 pub fn load() -> Result<Preferences> {
     match std::fs::read(config_path()) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),

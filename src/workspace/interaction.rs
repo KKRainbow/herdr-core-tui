@@ -8,9 +8,11 @@ use shell::{
     chrome,
     overlays::{
         Confirm, ContextMenu, Help, MenuAction, MenuTarget, NavTarget, Navigator, PaneMove, Rename,
-        RenameTarget, WorktreeCreate, WorktreeEntry, WorktreeOpen, WorktreeRemove,
-        global_menu_items, navigator_rows, navigator_selected_index, pane_move_destinations,
+        RenameTarget, Settings, SettingsSection, WorktreeCreate, WorktreeEntry, WorktreeOpen,
+        WorktreeRemove, global_menu_items, navigator_rows, navigator_selected_index,
+        pane_move_destinations,
     },
+    palette::{Palette, THEME_NAMES, normalized_theme_name},
     snapshot::Status,
 };
 
@@ -220,6 +222,7 @@ impl Workspace {
         let focused_pane = self.view().focused;
         match action {
             "help" => self.overlay = Some(Overlay::Help(Help::default())),
+            "settings" => self.open_settings(),
             "open_notification_target" => {
                 if let Some(address) = self.notification_target.clone() {
                     self.focus_agent(&address);
@@ -1038,6 +1041,124 @@ impl Workspace {
         }
     }
 
+    // ---- settings (Herdr `src/client/shell/settings.rs`) ---------------------
+
+    fn open_settings(&mut self) {
+        let original_theme = self.preferences.theme.clone();
+        let mut settings = Settings {
+            section: SettingsSection::Theme,
+            selected: 0,
+            original_theme,
+        };
+        settings.selected = self.settings_current(SettingsSection::Theme);
+        self.overlay = Some(Overlay::Settings(settings));
+    }
+
+    fn settings_current(&self, section: SettingsSection) -> usize {
+        match section {
+            SettingsSection::Theme => {
+                let theme = normalized_theme_name(&self.preferences.theme);
+                THEME_NAMES
+                    .iter()
+                    .position(|name| normalized_theme_name(name) == theme)
+                    .unwrap_or(0)
+            }
+            SettingsSection::Indicators => usize::from(self.config.symbols),
+            SettingsSection::Sound => usize::from(!self.preferences.sound.enabled),
+        }
+    }
+
+    fn select_settings_section(&mut self, settings: &mut Settings, section: SettingsSection) {
+        settings.section = section;
+        settings.selected = self.settings_current(section);
+    }
+
+    fn move_settings_selection(&mut self, settings: &mut Settings, delta: isize) {
+        let count = settings.section.choices();
+        settings.selected = (settings.selected as isize + delta)
+            .clamp(0, count.saturating_sub(1) as isize) as usize;
+        self.preview_settings(settings);
+    }
+
+    /// Shows a highlighted theme at once; Esc goes back to the saved one.
+    fn preview_settings(&mut self, settings: &Settings) {
+        if settings.section == SettingsSection::Theme
+            && let Some(palette) = THEME_NAMES
+                .get(settings.selected)
+                .and_then(|name| Palette::from_name(name))
+        {
+            self.config.palette = palette;
+        }
+    }
+
+    fn cancel_settings(&mut self, settings: Settings) {
+        if let Some(palette) = Palette::from_name(&settings.original_theme) {
+            self.config.palette = palette;
+        }
+    }
+
+    fn apply_settings(&mut self, mut settings: Settings) {
+        let (path, value): (&[&str], Value) = match settings.section {
+            SettingsSection::Theme => {
+                let Some(name) = THEME_NAMES.get(settings.selected) else {
+                    return;
+                };
+                (&["theme"], json!(name))
+            }
+            SettingsSection::Indicators => (
+                &["status_indicators"],
+                json!(if settings.selected == 0 {
+                    "dots"
+                } else {
+                    "symbols"
+                }),
+            ),
+            SettingsSection::Sound => (&["sound", "enabled"], json!(settings.selected == 0)),
+        };
+        let saved = crate::preferences::edit(path, value).and_then(|()| self.reload_config());
+        match saved {
+            Err(error) => {
+                self.toast(error.to_string(), true);
+                self.overlay = Some(Overlay::Settings(settings));
+            }
+            // A chosen theme closes settings, as in Herdr; other choices stay open.
+            Ok(()) if settings.section == SettingsSection::Theme => {}
+            Ok(()) => {
+                settings.original_theme = self.preferences.theme.clone();
+                self.overlay = Some(Overlay::Settings(settings));
+            }
+        }
+    }
+
+    fn settings_key(&mut self, mut settings: Settings, key: KeyEvent) {
+        let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        let step = |settings: &Settings, delta: isize| {
+            let all = SettingsSection::ALL;
+            let current = all.iter().position(|s| *s == settings.section).unwrap_or(0);
+            all[(current as isize + delta).rem_euclid(all.len() as isize) as usize]
+        };
+        match key.code {
+            KeyCode::Esc => return self.cancel_settings(settings),
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') if plain => {
+                let next = step(&settings, 1);
+                self.select_settings_section(&mut settings, next);
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') if plain => {
+                let previous = step(&settings, -1);
+                self.select_settings_section(&mut settings, previous);
+            }
+            KeyCode::Up | KeyCode::Char('k') if plain => {
+                self.move_settings_selection(&mut settings, -1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if plain => {
+                self.move_settings_selection(&mut settings, 1)
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if plain => return self.apply_settings(settings),
+            _ => {}
+        }
+        self.overlay = Some(Overlay::Settings(settings));
+    }
+
     // ---- overlay keys -------------------------------------------------------
 
     async fn overlay_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -1227,6 +1348,7 @@ impl Workspace {
                 KeyCode::Enter if !remove.removing => self.submit_worktree_remove(remove).await,
                 _ => self.overlay = Some(Overlay::WorktreeRemove(remove)),
             },
+            Overlay::Settings(settings) => self.settings_key(settings, key),
         }
         Ok(false)
     }
@@ -1340,6 +1462,7 @@ impl Workspace {
         use MenuAction as A;
         match (action, target) {
             (A::Keybinds, _) => return self.action("help").await,
+            (A::Settings, _) => return self.action("settings").await,
             (A::ReloadConfig, _) => return self.action("reload_config").await,
             (A::Detach, _) => return Ok(true),
             (A::Rename, Some(MenuTarget::Workspace { workspace_id, .. })) => {
@@ -2373,6 +2496,16 @@ impl Workspace {
             .find(|(rect, _)| contains(*rect, x, y))
             .map(|(_, id)| id.clone());
         let max_help = render.help_max_scroll;
+        let settings_tab = render
+            .settings_tabs
+            .iter()
+            .find(|(r, _)| contains(*r, x, y))
+            .map(|(_, s)| *s);
+        let settings_choice = render
+            .settings_choices
+            .iter()
+            .find(|(r, _)| contains(*r, x, y))
+            .map(|(_, i)| *i);
         let Some(overlay) = self.overlay.take() else {
             return Ok(false);
         };
@@ -2438,6 +2571,23 @@ impl Workspace {
                         self.step_pane_destination(&mut picker, scroll);
                     }
                     self.overlay = Some(Overlay::PaneMove(picker));
+                }
+            }
+            Overlay::Settings(mut settings) => {
+                if left && cancel {
+                    self.cancel_settings(settings);
+                } else if left && primary {
+                    self.apply_settings(settings);
+                } else {
+                    if left && let Some(section) = settings_tab {
+                        self.select_settings_section(&mut settings, section);
+                    } else if left && let Some(index) = settings_choice {
+                        settings.selected = index;
+                        self.preview_settings(&settings);
+                    } else if scroll != 0 {
+                        self.move_settings_selection(&mut settings, scroll);
+                    }
+                    self.overlay = Some(Overlay::Settings(settings));
                 }
             }
             Overlay::Help(mut help) => {

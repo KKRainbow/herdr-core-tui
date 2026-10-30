@@ -496,6 +496,7 @@ impl Palette {
     }
 
     /// Resolves a built-in theme name or one of Herdr's aliases.
+    /// The settings list offers `THEME_NAMES`, Herdr's built-in order.
     pub fn from_name(name: &str) -> Option<Self> {
         Some(
             match name.trim().to_lowercase().replace([' ', '_'], "-").as_str() {
@@ -535,6 +536,33 @@ impl Default for Palette {
     fn default() -> Self {
         Self::catppuccin()
     }
+}
+
+/// Herdr's built-in themes in its settings order (`src/config/theme.rs`).
+pub const THEME_NAMES: &[&str] = &[
+    "catppuccin",
+    "catppuccin-latte",
+    "terminal",
+    "tokyo-night",
+    "tokyo-night-day",
+    "dracula",
+    "nord",
+    "gruvbox",
+    "gruvbox-light",
+    "one-dark",
+    "one-light",
+    "solarized",
+    "solarized-light",
+    "kanagawa",
+    "kanagawa-lotus",
+    "rose-pine",
+    "rose-pine-dawn",
+    "vesper",
+];
+
+/// Herdr's comparison form of a theme name.
+pub fn normalized_theme_name(name: &str) -> String {
+    name.to_lowercase().replace([' ', '_'], "-")
 }
 
 #[cfg(test)]

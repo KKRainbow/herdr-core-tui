@@ -38,6 +38,7 @@ pub enum MenuAction {
     ParkTerminal,
     ClosePane,
     KeepTerminal,
+    Settings,
     Keybinds,
     ReloadConfig,
     Detach,
@@ -147,6 +148,7 @@ impl ContextMenu {
 
 pub fn global_menu_items() -> Vec<(&'static str, MenuAction)> {
     vec![
+        ("settings", MenuAction::Settings),
         ("keybinds", MenuAction::Keybinds),
         ("reload config", MenuAction::ReloadConfig),
         ("detach", MenuAction::Detach),
@@ -506,6 +508,42 @@ pub enum Overlay {
     WorktreeCreate(WorktreeCreate),
     WorktreeOpen(WorktreeOpen),
     WorktreeRemove(WorktreeRemove),
+    Settings(Settings),
+}
+
+/// Herdr's settings sections that apply to this client; agent integrations belong to core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSection {
+    Theme,
+    Indicators,
+    Sound,
+}
+
+impl SettingsSection {
+    pub const ALL: &[Self] = &[Self::Theme, Self::Indicators, Self::Sound];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::Indicators => "indicators",
+            Self::Sound => "sound",
+        }
+    }
+
+    pub fn choices(self) -> usize {
+        match self {
+            Self::Theme => crate::shell::palette::THEME_NAMES.len(),
+            Self::Indicators | Self::Sound => 2,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Settings {
+    pub section: SettingsSection,
+    pub selected: usize,
+    /// The theme in effect when settings opened; Esc restores it after previews.
+    pub original_theme: String,
 }
 
 impl Overlay {
@@ -535,6 +573,8 @@ pub struct OverlayRender {
     pub worktree_branch_input: Rect,
     pub worktree_path_input: Rect,
     pub pane_move_rows: Vec<(Rect, String)>,
+    pub settings_tabs: Vec<(Rect, SettingsSection)>,
+    pub settings_choices: Vec<(Rect, usize)>,
     pub help_max_scroll: usize,
     pub cursor: Option<Position>,
 }
@@ -771,6 +811,7 @@ pub fn render(b: &mut Buffer, overlay: &Overlay, cx: &Context<'_>) -> Option<Ove
         Overlay::WorktreeCreate(v) => render_worktree_create(b, v, p),
         Overlay::WorktreeOpen(v) => render_worktree_open(b, v, p),
         Overlay::WorktreeRemove(v) => render_worktree_remove(b, v, p),
+        Overlay::Settings(v) => render_settings(b, v, p),
         Overlay::ContextMenu(v) => render_context_menu(b, v, p),
         Overlay::GlobalMenu { .. } => None,
     }
@@ -1747,6 +1788,220 @@ fn render_worktree_remove(
         cancel: *cancel,
         ..OverlayRender::default()
     })
+}
+
+// Settings, adapted from Herdr `src/client/shell/settings_overlay.rs`.
+
+fn choice_style(selected: bool, p: &Palette) -> Style {
+    if selected {
+        Style::default()
+            .fg(p.contrast())
+            .bg(p.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(p.text).bg(p.panel_bg)
+    }
+}
+
+fn draw_choice(
+    b: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+    current: bool,
+    p: &Palette,
+) {
+    let style = choice_style(selected, p);
+    b.set_style(rect, style);
+    let marker = if selected { "▸" } else { " " };
+    let current = if current { " ✓" } else { "" };
+    put_text(
+        b,
+        rect.x,
+        rect.y,
+        rect.width,
+        &format!(" {marker} {label}{current}"),
+        style,
+    );
+}
+
+fn render_settings(b: &mut Buffer, settings: &Settings, p: &Palette) -> Option<OverlayRender> {
+    let q = popup(b.area, 76, 22)?;
+    let inner = panel(b, q, p.accent, p.panel_bg)?;
+    if inner.width < 20 || inner.height < 8 {
+        return None;
+    }
+    put_text(
+        b,
+        inner.x,
+        inner.y,
+        inner.width,
+        " settings",
+        Style::default()
+            .fg(p.text)
+            .bg(p.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut tab_x = inner.x;
+    let mut tab_hits = Vec::new();
+    for section in SettingsSection::ALL {
+        let label = format!(" {} ", section.label());
+        let width = display_width(&label).min(inner.right().saturating_sub(tab_x));
+        let rect = Rect::new(tab_x, inner.y + 1, width, 1);
+        let style = if *section == settings.section {
+            Style::default()
+                .fg(p.contrast())
+                .bg(p.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.overlay1).bg(p.panel_bg)
+        };
+        b.set_style(rect, style);
+        put_text(b, rect.x, rect.y, rect.width, &label, style);
+        tab_hits.push((rect, *section));
+        tab_x = tab_x.saturating_add(width.saturating_add(1));
+        if tab_x >= inner.right() {
+            break;
+        }
+    }
+    put_text(
+        b,
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        &"─".repeat(inner.width as usize),
+        Style::default().fg(p.surface0).bg(p.panel_bg),
+    );
+    let content = Rect::new(
+        inner.x,
+        inner.y + 4,
+        inner.width,
+        inner.height.saturating_sub(7),
+    );
+    let mut choice_hits = Vec::new();
+    match settings.section {
+        SettingsSection::Theme => {
+            let names = crate::shell::palette::THEME_NAMES;
+            let visible = usize::from(content.height);
+            let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));
+            for (visible_index, (index, name)) in names
+                .iter()
+                .enumerate()
+                .skip(scroll)
+                .take(visible)
+                .enumerate()
+            {
+                let rect = Rect::new(
+                    content.x,
+                    content.y + visible_index as u16,
+                    content.width,
+                    1,
+                );
+                let current = crate::shell::palette::normalized_theme_name(name)
+                    == crate::shell::palette::normalized_theme_name(&settings.original_theme);
+                draw_choice(b, rect, name, index == settings.selected, current, p);
+                choice_hits.push((rect, index));
+            }
+        }
+        SettingsSection::Indicators => render_choice_section(
+            b,
+            content,
+            "agent status indicators",
+            "choose color dots or distinct symbols for each state",
+            &["color dots  ● ● ● ○ ·", "distinct symbols  × ◐ ✓ ○ ·"],
+            settings.selected,
+            p,
+            &mut choice_hits,
+        ),
+        SettingsSection::Sound => render_choice_section(
+            b,
+            content,
+            "sound alerts",
+            "play sounds when agents change state in background",
+            &["on", "off"],
+            settings.selected,
+            p,
+            &mut choice_hits,
+        ),
+    }
+    let buttons = row(inner, &[10, 12], 2, inner.height.saturating_sub(1));
+    let (primary, close) = (buttons[0], buttons[1]);
+    button(
+        b,
+        primary,
+        " ↵ apply ",
+        Style::default()
+            .fg(p.contrast())
+            .bg(p.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+    button(
+        b,
+        close,
+        " esc close ",
+        Style::default()
+            .fg(p.text)
+            .bg(p.surface0)
+            .add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        b,
+        inner.x,
+        inner.bottom().saturating_sub(2),
+        inner.width,
+        " ↑↓ select  tab section",
+        Style::default().fg(p.overlay1).bg(p.panel_bg),
+    );
+    Some(OverlayRender {
+        area: q,
+        primary,
+        cancel: close,
+        settings_tabs: tab_hits,
+        settings_choices: choice_hits,
+        ..OverlayRender::default()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_choice_section(
+    b: &mut Buffer,
+    area: Rect,
+    title: &str,
+    description: &str,
+    choices: &[&str],
+    selected: usize,
+    p: &Palette,
+    hits: &mut Vec<(Rect, usize)>,
+) {
+    put_text(
+        b,
+        area.x,
+        area.y,
+        area.width,
+        title,
+        Style::default()
+            .fg(p.text)
+            .bg(p.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        b,
+        area.x,
+        area.y + 1,
+        area.width,
+        description,
+        Style::default().fg(p.overlay1).bg(p.panel_bg),
+    );
+    let row_gap = u16::from(choices.len() > 2);
+    for (index, choice) in choices.iter().enumerate() {
+        let y = area.y + 3 + index as u16 * (1 + row_gap);
+        if y >= area.bottom() {
+            break;
+        }
+        let rect = Rect::new(area.x, y, area.width, 1);
+        draw_choice(b, rect, choice, index == selected, false, p);
+        hits.push((rect, index));
+    }
 }
 
 /// A transient message in the top-right corner, like Herdr's notification toasts.

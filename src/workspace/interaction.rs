@@ -817,7 +817,12 @@ impl Workspace {
             nouns[((seed / 8) % 8) as usize],
             seed & 0xffff
         );
-        let checkout_path = match self.git().default_path(&repository, &branch).await {
+        let directory = self.preferences.worktrees.directory.clone();
+        let checkout_path = match self
+            .git()
+            .default_path_in(&repository, &branch, directory.as_deref())
+            .await
+        {
             Ok(path) => path,
             Err(error) => {
                 self.toast(error.to_string(), true);
@@ -903,6 +908,7 @@ impl Workspace {
             error: None,
             removing: false,
             review: None,
+            force_confirmation: false,
         }));
     }
 
@@ -962,13 +968,24 @@ impl Workspace {
                 }
             },
         };
+        // Herdr asks once more when removal deletes work the person has not accepted.
+        let risky = review["risks"].as_array().is_some_and(|r| !r.is_empty());
+        if risky && !remove.force_confirmation {
+            remove.force_confirmation = true;
+            remove.review = Some(review);
+            remove.error = None;
+            self.overlay = Some(Overlay::WorktreeRemove(remove));
+            return;
+        }
         let mut confirmed = args;
         confirmed["confirm"] = json!(true);
         confirmed["expected"] = review;
+        confirmed["force"] = json!(risky);
         match self.command("worktree.remove", confirmed).await {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
                 remove.review = None;
+                remove.force_confirmation = false;
                 remove.error = Some(error.to_string());
                 self.overlay = Some(Overlay::WorktreeRemove(remove));
             }

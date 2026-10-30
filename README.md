@@ -64,6 +64,8 @@ In the new worktree dialog, select `new branch` or `existing branch` with Tab or
 Use Up/Down or click to select the branch or checkout path field.
 The default path follows the branch name until you edit the path.
 Relative checkout paths start from the repository on the target machine.
+Set `worktrees.directory` in `config.json` to change where new checkouts go, as Herdr's `[worktrees] directory` does.
+Removing a checkout with dirty files or unreferenced commits asks once more; `delete anyway` deletes that work.
 Pane menus also park the terminal without ending it.
 Right-click an agent without a pane to keep it in a new tab.
 Shift+right-click sends the click to the program.

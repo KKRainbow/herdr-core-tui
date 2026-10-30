@@ -490,6 +490,8 @@ pub struct WorktreeRemove {
     pub error: Option<String>,
     pub removing: bool,
     pub review: Option<Value>,
+    /// Herdr's second step: the reviewed checkout has work removal deletes.
+    pub force_confirmation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1702,6 +1704,16 @@ fn render_worktree_remove(
         " The branch is not deleted. The workspace will close.",
         text,
     );
+    if r.force_confirmation {
+        put_text(
+            b,
+            i.x,
+            i.y + 4,
+            i.width,
+            " Dirty or untracked files will be permanently deleted.",
+            Style::default().fg(p.red).bg(p.panel_bg),
+        );
+    }
     status_line(
         b,
         i,
@@ -1718,7 +1730,11 @@ fn render_worktree_remove(
     button(
         b,
         *primary,
-        " ↵ remove ",
+        if r.force_confirmation {
+            " ↵ delete anyway "
+        } else {
+            " ↵ remove "
+        },
         Style::default()
             .fg(p.contrast())
             .bg(p.red)

@@ -4,7 +4,7 @@ use herdr_client_lib::{
     document::Axis,
     sync::{Session, WriteOutcome},
     view::View,
-    worktrees::{CreatePlan, Git},
+    worktrees::{CreatePlan, Git, RemovalRisk},
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,6 +60,16 @@ fn creation_value(result: &herdr_client_lib::commands::Creation) -> Value {
 fn change_value(result: herdr_client_lib::commands::ChangeOutcome) -> Value {
     json!({"ok":result.failure.is_none()&&matches!(result.layout,Some(WriteOutcome::Written)),"terminal":result.terminal,"effects":result.effects.iter().map(|effect|json!({"kind":format!("{:?}",effect.kind),"result":effect.result})).collect::<Vec<_>>(),"failure":result.failure.as_ref().map(|failure|json!({"kind":format!("{:?}",failure.kind),"error":failure.error.to_string()})),"layout":result.layout.as_ref().map(layout_value)})
 }
+fn risk_word(risk: RemovalRisk) -> &'static str {
+    match risk {
+        RemovalRisk::Dirty => "dirty or untracked files",
+        RemovalRisk::UnreferencedCommits => "commits no branch holds",
+        RemovalRisk::UnpushedSubmoduleCommits => "unpushed submodule commits",
+        RemovalRisk::Locked => "a locked checkout",
+        RemovalRisk::Prunable => "a missing checkout folder",
+        RemovalRisk::Bare => "a bare repository",
+    }
+}
 fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
     json!({"code":output.code,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)})
 }
@@ -70,7 +80,7 @@ fn focus_created(view: &mut View, document: &herdr_client_lib::document::Documen
         view.zoom(None);
     }
 }
-pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight | id, next, share\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
+pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight | id, next, share\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm, force\nMachine, focus, zoom, copy and search are private viewer actions.";
 
 /// Moves spaces together, in the given order, to just before `before` (or to the end).
 fn move_spaces(
@@ -312,7 +322,13 @@ pub async fn execute(
                 let branch = required(&args, "branch")?;
                 let path = match text(&args, "path") {
                     Some(path) => path.to_owned(),
-                    None => git.default_path(repository, branch).await?,
+                    None => {
+                        let directory = crate::preferences::load()
+                            .ok()
+                            .and_then(|p| p.worktrees.directory);
+                        git.default_path_in(repository, branch, directory.as_deref())
+                            .await?
+                    }
                 };
                 let result = git
                     .create_space(
@@ -342,13 +358,19 @@ pub async fn execute(
                 let assessment = git
                     .assess_remove(required(&args, "repository")?, required(&args, "path")?)
                     .await?;
-                if !assessment.safe() {
-                    return Err(format!("Checkout cannot be removed safely: {assessment:?}").into());
+                let risks = assessment
+                    .risks()
+                    .iter()
+                    .map(|risk| risk_word(*risk))
+                    .collect::<Vec<_>>();
+                if !assessment.allowed(true) {
+                    return Err(format!("Checkout cannot be removed: {}", risks.join(", ")).into());
                 }
+                let force = args["force"] == true;
                 let close = session
                     .assess_close(machine, &target(&args, view, "space")?)
                     .await?;
-                let review = json!({"confirmation":"Remove this checkout and close its workspace","path":assessment.checkout.path,"version":close.version,"assessment":format!("{assessment:?}"),"terminals":close.terminals.iter().map(|t|json!({"address":t.address,"pid":t.pid})).collect::<Vec<_>>()});
+                let review = json!({"confirmation":"Remove this checkout and close its workspace","path":assessment.checkout.path,"version":close.version,"assessment":format!("{assessment:?}"),"risks":risks,"terminals":close.terminals.iter().map(|t|json!({"address":t.address,"pid":t.pid})).collect::<Vec<_>>()});
                 if args["confirm"] != true {
                     return Ok(review);
                 }
@@ -358,7 +380,14 @@ pub async fn execute(
                 {
                     return Err("Removal conditions changed. Review the checkout again.".into());
                 }
-                let result = git.remove_space(session, &assessment, close).await?;
+                if !assessment.allowed(force) {
+                    return Err(format!(
+                        "Removing this checkout deletes {}; confirm with force",
+                        risks.join(", ")
+                    )
+                    .into());
+                }
+                let result = git.remove_space(session, &assessment, close, force).await?;
                 let git = result.git.as_ref().map(|result| match result {
                     Ok(output) => git_value(output),
                     Err(error) => json!({"error":error.to_string()}),

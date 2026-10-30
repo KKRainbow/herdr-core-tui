@@ -15,6 +15,15 @@ pub struct Preferences {
     /// Herdr `[keys]` names mapped to bindings, such as `"new_tab": "prefix+c"`.
     pub keys: BTreeMap<String, String>,
     pub sound: Sound,
+    pub worktrees: Worktrees,
+}
+/// Herdr's `[worktrees]`: where new checkouts go.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Worktrees {
+    /// Root for `<repo>/<branch-slug>` checkouts; `~` starts at the machine's home.
+    /// Unset uses Herdr's `~/.herdr/worktrees`.
+    pub directory: Option<String>,
 }
 /// Herdr's `[ui.sound]`: on by default, with optional mp3 replacements.
 #[derive(Serialize, Deserialize)]
@@ -57,6 +66,7 @@ impl Default for Preferences {
             agent_panel_sort: "spaces".into(),
             keys: BTreeMap::new(),
             sound: Sound::default(),
+            worktrees: Worktrees::default(),
         }
     }
 }

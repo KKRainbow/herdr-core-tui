@@ -207,6 +207,7 @@ impl Workspace {
         if let Some(address) = &self.peek {
             self.panes.push(Pane {
                 id: format!("@{address}"),
+                name: None,
                 terminal: Some(address.clone()),
                 description: "Agent".into(),
                 area: body,

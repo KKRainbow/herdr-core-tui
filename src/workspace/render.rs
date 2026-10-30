@@ -123,7 +123,7 @@ impl Workspace {
         }
         for pane in &self.panes {
             let active = self.peek.is_some() || view.focused.as_deref() == Some(&pane.id);
-            let title = pane.terminal.as_deref().unwrap_or(&pane.description);
+            let title = pane.title();
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(title)

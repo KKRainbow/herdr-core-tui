@@ -517,6 +517,21 @@ impl Workspace {
             .or(self.view().focused)
     }
     /// Runs a shared or private command and reports failures as a toast.
+    /// Herdr opens a workspace where it starts when the session has none. A
+    /// never-written document is a new session; one emptied by closing stays empty.
+    async fn seed_startup_space(&mut self) {
+        let fresh = self.machine.is_empty()
+            && self.session.documents.get("").is_some_and(|slot| {
+                slot.version == 0
+                    && slot
+                        .document
+                        .as_ref()
+                        .is_some_and(|d| d.value()["spaces"].as_array().is_some_and(Vec::is_empty))
+            });
+        if fresh && let Ok(cwd) = std::env::current_dir() {
+            self.run("space.new", json!({"folder":cwd})).await;
+        }
+    }
     async fn run(&mut self, command: &str, args: Value) -> Option<Value> {
         match self.command(command, args).await {
             Ok(value) => Some(value),
@@ -841,6 +856,7 @@ pub async fn run(
         app.session.refresh(&app.machine).await;
     }
     app.recover_placements().await;
+    app.seed_startup_space().await;
     app.reconcile();
     app.refresh_snapshot();
     app.refresh_git();

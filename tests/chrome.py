@@ -20,6 +20,8 @@ try:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
     original = termios.tcgetattr(slave)
+    # An emptied session stays empty; only a new one gets a startup workspace.
+    core.rpc("doc.set", {"name": "herdr-app", "value": {"spaces": []}, "version": 0})
     process = subprocess.Popen([str(binary), "--instance", "chrome"], env=core.env, stdin=slave, stdout=slave, stderr=slave)
 
     def read_for(seconds=.2):

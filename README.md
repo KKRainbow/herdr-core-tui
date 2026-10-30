@@ -21,6 +21,8 @@ The instance name is optional for interactive use and required for live control.
 Add a terminal address to use the single-terminal viewer; Ctrl+Q quits it.
 Set `HC_BINARY` to select a core executable.
 Detaching leaves shared terminal programs running.
+A new session opens a workspace in the folder where the TUI starts, as Herdr does.
+A session whose workspaces were all closed stays empty.
 
 ## Interface
 

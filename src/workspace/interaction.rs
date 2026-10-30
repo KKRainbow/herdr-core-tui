@@ -323,7 +323,7 @@ impl Workspace {
                                 self.focus(pane);
                             }
                         }
-                        Hit::Agent(address) => self.peek = Some(address),
+                        Hit::Agent(address) => self.focus_agent(&address),
                         Hit::Pane(id) => {
                             if !id.starts_with('@') {
                                 self.focus(&id);

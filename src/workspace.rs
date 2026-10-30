@@ -170,6 +170,30 @@ impl Workspace {
             self.peek = None;
         }
     }
+    fn focus_agent(&mut self, address: &str) {
+        let placed = self.session.documents.keys().find_map(|machine| {
+            let doc = self.session.document(machine).ok()?;
+            agent_pane(doc.value(), address, machine).map(|id| (machine.clone(), id))
+        });
+        if let Some((machine, pane)) = placed {
+            self.machine = machine;
+            self.focus(&pane);
+        } else {
+            self.peek = Some(address.into());
+        }
+    }
+    fn check_pane_action(&self, command: &str) -> Result<()> {
+        if self.peek.is_some()
+            && (command.starts_with("pane.")
+                || matches!(
+                    command,
+                    "terminal.park" | "split.row" | "split.column" | "zoom"
+                ))
+        {
+            return Err("This agent has no workspace pane. Keep it in a tab first.".into());
+        }
+        Ok(())
+    }
     fn geometry(&mut self, area: Rect) {
         self.panes.clear();
         let sidebar = self.preferences.sidebar_width.min(area.width / 3);
@@ -337,7 +361,7 @@ impl Workspace {
             {
                 return Err("Terminal unavailable".into());
             }
-            self.peek = Some(address.into());
+            self.focus_agent(address);
             return Ok(());
         }
         if command == "machine" {
@@ -364,6 +388,7 @@ impl Workspace {
             }
             return Ok(());
         }
+        self.check_pane_action(command)?;
         let mut view = self.view();
         let result = actions::execute(
             &mut self.session,
@@ -395,6 +420,7 @@ impl Workspace {
         Ok(())
     }
     async fn action(&mut self, action: &str) -> Result<()> {
+        self.check_pane_action(action)?;
         match action {
             "menu" => self.dialog = Some(Dialog::Menu { selected: 0 }),
             "help" => {
@@ -420,12 +446,18 @@ impl Workspace {
                     .filter(|r| r["reported"] == true || !r["status"].is_null())
                     .filter_map(|r| r["address"].as_str())
                     .collect();
-                let current = self.peek.as_deref();
+                let active = self
+                    .active_id()
+                    .and_then(|id| self.surfaces.get(&id))
+                    .map(|s| s.address.as_str());
+                let current = self.peek.as_deref().or(active);
                 let index = agents
                     .iter()
                     .position(|a| Some(*a) == current)
                     .map_or(0, |i| (i + 1) % agents.len().max(1));
-                self.peek = agents.get(index).map(|s| (*s).into());
+                if let Some(address) = agents.get(index).map(|s| s.to_string()) {
+                    self.focus_agent(&address);
+                }
             }
             "space.next" => {
                 if let Some(doc) = self.document()
@@ -574,6 +606,26 @@ impl Workspace {
         self.reconcile();
     }
 }
+fn agent_pane(node: &Value, address: &str, machine: &str) -> Option<String> {
+    if node["type"] == "block"
+        && node["content"]["terminal"]
+            .as_str()
+            .is_some_and(|a| qualify(a, machine) == address)
+    {
+        return node["id"].as_str().map(str::to_owned);
+    }
+    for key in ["spaces", "tabs", "children"] {
+        if let Some(found) = node[key]
+            .as_array()
+            .and_then(|items| items.iter().find_map(|n| agent_pane(n, address, machine)))
+        {
+            return Some(found);
+        }
+    }
+    node.get("root")
+        .and_then(|n| agent_pane(n, address, machine))
+}
+
 fn identities(
     client: &herdr_client_lib::client::Client,
     machines: &Value,
@@ -860,4 +912,19 @@ pub async fn run(
     }
     preferences::save_views(&view_key, &app.views)?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn agent_target_resolves_only_placed_terminal() {
+        let doc = json!({"spaces":[{"tabs":[{"root":{"type":"row","children":[
+            {"type":"block","id":"p","content":{"terminal":"t1"}}
+        ]}}]}]});
+        assert_eq!(
+            agent_pane(&doc, &qualify("t1", "remote"), "remote"),
+            Some("p".into())
+        );
+        assert_eq!(agent_pane(&doc, "missing", "remote"), None);
+    }
 }

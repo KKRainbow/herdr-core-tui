@@ -7,9 +7,9 @@ use ratatui::layout::Position;
 use shell::{
     chrome,
     overlays::{
-        Confirm, ContextMenu, Help, MenuAction, MenuTarget, NavTarget, Navigator, Rename,
+        Confirm, ContextMenu, Help, MenuAction, MenuTarget, NavTarget, Navigator, PaneMove, Rename,
         RenameTarget, WorktreeCreate, WorktreeEntry, WorktreeOpen, WorktreeRemove,
-        global_menu_items, navigator_rows, navigator_selected_index,
+        global_menu_items, navigator_rows, navigator_selected_index, pane_move_destinations,
     },
     snapshot::Status,
 };
@@ -712,6 +712,61 @@ impl Workspace {
         self.invalidate_git();
     }
 
+    fn open_pane_move(&mut self, pane: String) {
+        let destination = pane_move_destinations(&self.snapshot, &pane)
+            .first()
+            .map(|t| t.tab_id.clone())
+            .unwrap_or_default();
+        self.overlay = Some(Overlay::PaneMove(PaneMove {
+            pane_id: pane,
+            machine: self.machine.clone(),
+            destination,
+            error: None,
+        }));
+    }
+
+    async fn submit_pane_move(&mut self, mut picker: PaneMove) {
+        if picker.machine != self.machine {
+            picker.error = Some("The machine changed. Select the source pane again.".into());
+        } else if !pane_move_destinations(&self.snapshot, &picker.pane_id)
+            .iter()
+            .any(|tab| tab.tab_id == picker.destination)
+        {
+            picker.error = Some("Select an available destination tab.".into());
+        } else {
+            match self
+                .command(
+                    "pane.move",
+                    json!({"id":picker.pane_id,"destination":picker.destination}),
+                )
+                .await
+            {
+                Ok(_) => {
+                    self.view_mut().zoomed = None;
+                    self.focus(&picker.pane_id);
+                    return;
+                }
+                Err(error) => picker.error = Some(error.to_string()),
+            }
+        }
+        self.overlay = Some(Overlay::PaneMove(picker));
+    }
+
+    fn step_pane_destination(&self, picker: &mut PaneMove, delta: isize) {
+        let tabs = pane_move_destinations(&self.snapshot, &picker.pane_id);
+        if tabs.is_empty() {
+            return;
+        }
+        let index = tabs
+            .iter()
+            .position(|tab| tab.tab_id == picker.destination)
+            .map_or(0, |index| {
+                (index as isize + delta).clamp(0, tabs.len() as isize - 1) as usize
+            });
+        picker.destination = tabs[index].tab_id.clone();
+        picker.error = None;
+    }
+
     // ---- worktrees ----------------------------------------------------------
 
     fn git(&self) -> herdr_client_lib::worktrees::Git {
@@ -973,6 +1028,19 @@ impl Workspace {
                 KeyCode::Enter | KeyCode::Char('y') => self.accept_confirm(confirm).await,
                 KeyCode::Esc | KeyCode::Char('n') => {}
                 _ => self.overlay = Some(Overlay::Confirm(confirm)),
+            },
+            Overlay::PaneMove(mut picker) => match key.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => self.submit_pane_move(picker).await,
+                _ => {
+                    if up || key.code == KeyCode::Char('k') {
+                        self.step_pane_destination(&mut picker, -1);
+                    }
+                    if down || key.code == KeyCode::Char('j') {
+                        self.step_pane_destination(&mut picker, 1);
+                    }
+                    self.overlay = Some(Overlay::PaneMove(picker));
+                }
             },
             Overlay::Help(mut help) => {
                 let max = self.overlay_render.help_max_scroll;
@@ -1258,6 +1326,7 @@ impl Workspace {
                 self.focus(&pane_id);
                 self.toggle_zoom();
             }
+            (A::MovePane, Some(MenuTarget::Pane { pane_id, .. })) => self.open_pane_move(pane_id),
             (A::ParkTerminal, Some(MenuTarget::Pane { pane_id, .. })) => {
                 self.run("terminal.park", json!({"id":pane_id})).await;
             }
@@ -2179,6 +2248,11 @@ impl Workspace {
             .find(|(r, _)| contains(*r, x, y))
             .map(|(_, i)| *i);
         let worktree_search = contains(render.worktree_search, x, y);
+        let pane_destination = render
+            .pane_move_rows
+            .iter()
+            .find(|(rect, _)| contains(*rect, x, y))
+            .map(|(_, id)| id.clone());
         let max_help = render.help_max_scroll;
         let Some(overlay) = self.overlay.take() else {
             return Ok(false);
@@ -2231,6 +2305,20 @@ impl Workspace {
                     self.accept_confirm(confirm).await;
                 } else if !(left && cancel) {
                     self.overlay = Some(Overlay::Confirm(confirm));
+                }
+            }
+            Overlay::PaneMove(mut picker) => {
+                if left && primary {
+                    self.submit_pane_move(picker).await;
+                } else if !(left && cancel) {
+                    if left && let Some(destination) = pane_destination {
+                        picker.destination = destination;
+                        picker.error = None;
+                    }
+                    if scroll != 0 {
+                        self.step_pane_destination(&mut picker, scroll);
+                    }
+                    self.overlay = Some(Overlay::PaneMove(picker));
                 }
             }
             Overlay::Help(mut help) => {

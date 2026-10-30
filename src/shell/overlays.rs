@@ -33,6 +33,7 @@ pub enum MenuAction {
     SwapWithFocusedPane,
     SplitRight,
     SplitDown,
+    MovePane,
     Zoom,
     ParkTerminal,
     ClosePane,
@@ -132,6 +133,7 @@ impl ContextMenu {
                 items.extend([
                     ("Split right", A::SplitRight),
                     ("Split down", A::SplitDown),
+                    ("Move pane...", A::MovePane),
                     ("Zoom", A::Zoom),
                     ("Park terminal", A::ParkTerminal),
                     ("Close pane", A::ClosePane),
@@ -173,6 +175,28 @@ pub struct Confirm {
     pub detail: String,
     pub command: String,
     pub args: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct PaneMove {
+    pub pane_id: String,
+    pub machine: String,
+    pub destination: String,
+    pub error: Option<String>,
+}
+
+pub fn pane_move_destinations<'a>(
+    snapshot: &'a Snapshot,
+    pane: &str,
+) -> Vec<&'a super::snapshot::Tab> {
+    let Some(source) = snapshot.pane(pane) else {
+        return Vec::new();
+    };
+    snapshot
+        .tabs
+        .iter()
+        .filter(|tab| tab.tab_id != source.tab_id)
+        .collect()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -471,6 +495,7 @@ pub enum Overlay {
     ContextMenu(ContextMenu),
     Rename(Rename),
     Confirm(Confirm),
+    PaneMove(PaneMove),
     Help(Help),
     Navigator(Navigator),
     WorktreeCreate(WorktreeCreate),
@@ -500,6 +525,7 @@ pub struct OverlayRender {
     pub navigator_search: Rect,
     pub worktree_search: Rect,
     pub worktree_rows: Vec<(Rect, usize)>,
+    pub pane_move_rows: Vec<(Rect, String)>,
     pub help_max_scroll: usize,
     pub cursor: Option<Position>,
 }
@@ -730,6 +756,7 @@ pub fn render(b: &mut Buffer, overlay: &Overlay, cx: &Context<'_>) -> Option<Ove
     match overlay {
         Overlay::Rename(v) => render_rename(b, v, p),
         Overlay::Confirm(v) => render_confirm(b, v, p),
+        Overlay::PaneMove(v) => render_pane_move(b, v, cx.snapshot, p),
         Overlay::Help(v) => render_help(b, v, cx.keys, p),
         Overlay::Navigator(v) => render_navigator(b, v, cx),
         Overlay::WorktreeCreate(v) => render_worktree_create(b, v, p),
@@ -745,6 +772,84 @@ fn title_style(p: &Palette) -> Style {
         .fg(p.text)
         .bg(p.panel_bg)
         .add_modifier(Modifier::BOLD)
+}
+
+fn render_pane_move(
+    b: &mut Buffer,
+    v: &PaneMove,
+    snapshot: &Snapshot,
+    p: &Palette,
+) -> Option<OverlayRender> {
+    let tabs = pane_move_destinations(snapshot, &v.pane_id);
+    let height = (tabs.len() + 8).clamp(10, 24) as u16;
+    let q = popup(b.area, 72, height)?;
+    let i = panel(b, q, p.accent, p.panel_bg)?;
+    put_text(b, i.x, i.y, i.width, "move pane to tab", title_style(p));
+    let body = Rect::new(i.x, i.y + 2, i.width, i.height.saturating_sub(6));
+    let selected = tabs
+        .iter()
+        .position(|tab| tab.tab_id == v.destination)
+        .unwrap_or(0);
+    let start = selected.saturating_sub(usize::from(body.height.saturating_sub(1)));
+    let mut hits = Vec::new();
+    for (index, tab) in tabs
+        .iter()
+        .skip(start)
+        .take(usize::from(body.height))
+        .enumerate()
+    {
+        let rect = Rect::new(body.x, body.y + index as u16, body.width, 1);
+        let style = if tab.tab_id == v.destination {
+            primary_style(p)
+        } else {
+            Style::default().fg(p.text).bg(p.panel_bg)
+        };
+        b.set_style(rect, style);
+        let workspace = snapshot
+            .workspace(&tab.workspace_id)
+            .map_or("", |w| w.label.as_str());
+        put_text(
+            b,
+            rect.x,
+            rect.y,
+            rect.width,
+            &format!(" {workspace} / {}", tab.label),
+            style,
+        );
+        hits.push((rect, tab.tab_id.clone()));
+    }
+    if tabs.is_empty() {
+        put_text(
+            b,
+            body.x,
+            body.y,
+            body.width,
+            " no other tabs; create a tab or workspace first",
+            Style::default().fg(p.overlay0).bg(p.panel_bg),
+        );
+    }
+    status_line(b, i, i.bottom() - 3, false, "", v.error.as_deref(), p);
+    put_text(
+        b,
+        i.x,
+        i.bottom() - 2,
+        i.width,
+        " ↑↓/j/k choose destination",
+        Style::default().fg(p.overlay0).bg(p.panel_bg),
+    );
+    let buttons = row(i, &[10, 12], 2, i.height.saturating_sub(1));
+    let [primary, cancel] = buttons.as_slice() else {
+        return None;
+    };
+    button(b, *primary, " ↵ move ", primary_style(p));
+    button(b, *cancel, " esc cancel ", secondary_style(p));
+    Some(OverlayRender {
+        area: q,
+        primary: *primary,
+        cancel: *cancel,
+        pane_move_rows: hits,
+        ..OverlayRender::default()
+    })
 }
 
 fn render_rename(b: &mut Buffer, v: &Rename, p: &Palette) -> Option<OverlayRender> {

@@ -28,6 +28,7 @@ The interface follows Herdr: a sidebar with spaces above and agents below, a tab
 Spaces show their state dot, name, and Git branch.
 Linked worktrees appear under their main checkout; click the arrow to collapse the group.
 The agents list shows terminals that report OSC 7501 status, including ones without a pane.
+Use the pane menu's `Move pane...` chooser to move a pane to a tab in any workspace on the current machine.
 Click `grouped` to sort agents by priority instead.
 Panes have borders only when a tab shows several; the focused pane's border uses the accent color.
 

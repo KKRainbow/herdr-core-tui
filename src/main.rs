@@ -1,6 +1,14 @@
+mod actions;
 mod connection;
+mod copy;
+mod dialog;
+mod editor;
 mod input;
+mod layout;
+mod paint;
+mod preferences;
 mod vt;
+mod workspace;
 use crossterm::{
     cursor,
     event::{self, Event, EventStream, KeyCode, KeyModifiers},
@@ -74,7 +82,7 @@ async fn run() -> Result<()> {
         println!("herder-tui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if args.len() != 3 || args[0] != "--session" || args[1].is_empty() {
+    if !(2..=3).contains(&args.len()) || args[0] != "--session" || args[1].is_empty() {
         return Err("usage: herder-tui --session SESSION TERMINAL".into());
     }
     let config = HcConfig {
@@ -84,6 +92,9 @@ async fn run() -> Result<()> {
         session: args[1].clone(),
         environment: Default::default(),
     };
+    if args.len() == 2 {
+        return workspace::run(config).await;
+    }
     let mut size = terminal::size()?;
     let mut connection =
         Some(connection::Connection::connect(&config, &args[2], size, false).await?);

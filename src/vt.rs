@@ -25,11 +25,92 @@ pub struct Cell {
     pub wide: bool,
 }
 
+#[derive(Clone)]
 pub struct Frame {
     pub rows: Vec<Vec<Cell>>,
     pub cursor: Option<(u16, u16)>,
     pub bg: Rgb,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placement {
+    pub image: u32,
+    /// Changes whenever the image's pixels do (cache key).
+    pub generation: u64,
+    pub col: i32,
+    pub row: i32,
+    pub width: u32,
+    pub height: u32,
+    pub source: [u32; 4],
+    pub z: i32,
+}
+
+/// PNG decoding for kitty graphics (libghostty-vt leaves it to the embedder).
+unsafe extern "C" fn decode_png(
+    _ud: *mut c_void,
+    alloc: *const GhosttyAllocator,
+    data: *const u8,
+    len: usize,
+    out: *mut GhosttySysImage,
+) -> bool {
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(
+        png::Transformations::EXPAND | png::Transformations::STRIP_16 | png::Transformations::ALPHA,
+    );
+    let Ok(mut reader) = decoder.read_info() else {
+        return false;
+    };
+    if reader.output_buffer_size() > 16 * 1024 * 1024 {
+        return false;
+    }
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let Ok(info) = reader.next_frame(&mut buf) else {
+        return false;
+    };
+    let (w, h) = (info.width, info.height);
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+        png::ColorType::GrayscaleAlpha => buf[..info.buffer_size()]
+            .chunks(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Rgb => buf[..info.buffer_size()]
+            .chunks(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::Grayscale => buf[..info.buffer_size()]
+            .iter()
+            .flat_map(|g| [*g, *g, *g, 255])
+            .collect(),
+        _ => return false,
+    };
+    let ptr = unsafe { ghostty_alloc(alloc, rgba.len()) };
+    if ptr.is_null() {
+        return false;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(rgba.as_ptr(), ptr, rgba.len());
+        *out = GhosttySysImage {
+            width: w,
+            height: h,
+            data: ptr,
+            data_len: rgba.len(),
+        };
+    }
+    true
+}
+
+fn install_png_decoder() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let f: GhosttySysDecodePngFn = Some(decode_png);
+        ghostty_sys_set(
+            GHOSTTY_SYS_OPT_DECODE_PNG,
+            std::mem::transmute::<GhosttySysDecodePngFn, *const c_void>(f),
+        );
+    });
+}
+
 pub struct Vt {
     term: GhosttyTerminal,
     state: GhosttyRenderState,
@@ -47,6 +128,7 @@ fn ok(result: GhosttyResult, operation: &str) {
 }
 impl Vt {
     pub fn new(cols: u16, rows: u16) -> Self {
+        install_png_decoder();
         unsafe {
             let mut vt = Self {
                 term: std::ptr::null_mut(),
@@ -92,6 +174,19 @@ impl Vt {
                 ghostty_mouse_event_new(std::ptr::null(), &mut vt.mouse_event),
                 "mouse event",
             );
+            let images: usize = 16 * 1024 * 1024;
+            ghostty_terminal_set(
+                vt.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                &images as *const _ as *const c_void,
+            );
+            let lines: usize = 10_000;
+            ghostty_terminal_set(
+                vt.term,
+                GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
+                &lines as *const _ as *const c_void,
+            );
+            ghostty_terminal_resize(vt.term, vt.cols, vt.rows, 1, 2);
             let limit: usize = 10_000_000;
             ok(
                 ghostty_terminal_set(
@@ -104,13 +199,172 @@ impl Vt {
             vt
         }
     }
+    /// Visible kitty graphics placements, bottom layer first.
+    pub fn placements(&self) -> Vec<Placement> {
+        let mut out = Vec::new();
+        unsafe {
+            let mut g: GhosttyKittyGraphics = std::ptr::null_mut();
+            if ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
+                &mut g as *mut _ as *mut c_void,
+            ) != GHOSTTY_SUCCESS
+                || g.is_null()
+            {
+                return out;
+            }
+            let mut it: GhosttyKittyGraphicsPlacementIterator = std::ptr::null_mut();
+            if ghostty_kitty_graphics_placement_iterator_new(std::ptr::null(), &mut it)
+                != GHOSTTY_SUCCESS
+            {
+                return out;
+            }
+            if ghostty_kitty_graphics_get(
+                g,
+                GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
+                &mut it as *mut _ as *mut c_void,
+            ) == GHOSTTY_SUCCESS
+            {
+                while ghostty_kitty_graphics_placement_next(it) {
+                    let (mut id, mut z, mut virt) = (0u32, 0i32, false);
+                    ghostty_kitty_graphics_placement_get(
+                        it,
+                        GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID,
+                        &mut id as *mut _ as *mut c_void,
+                    );
+                    ghostty_kitty_graphics_placement_get(
+                        it,
+                        GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z,
+                        &mut z as *mut _ as *mut c_void,
+                    );
+                    ghostty_kitty_graphics_placement_get(
+                        it,
+                        GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL,
+                        &mut virt as *mut _ as *mut c_void,
+                    );
+                    let img = ghostty_kitty_graphics_image(g, id);
+                    if virt || img.is_null() {
+                        continue;
+                    }
+                    let mut info = GhosttyKittyGraphicsPlacementRenderInfo {
+                        size: std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
+                        ..Default::default()
+                    };
+                    if ghostty_kitty_graphics_placement_render_info(it, img, self.term, &mut info)
+                        != GHOSTTY_SUCCESS
+                        || !info.viewport_visible
+                    {
+                        continue;
+                    }
+                    let mut generation = 0u64;
+                    ghostty_kitty_graphics_image_get(
+                        img,
+                        GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
+                        &mut generation as *mut _ as *mut c_void,
+                    );
+                    out.push(Placement {
+                        image: id,
+                        generation,
+                        col: info.viewport_col,
+                        row: info.viewport_row,
+                        width: info.pixel_width,
+                        height: info.pixel_height,
+                        source: [
+                            info.source_x,
+                            info.source_y,
+                            info.source_width,
+                            info.source_height,
+                        ],
+                        z,
+                    });
+                }
+            }
+            ghostty_kitty_graphics_placement_iterator_free(it);
+        }
+        out.sort_by_key(|p| p.z);
+        out
+    }
+
+    /// An image's pixels as BGRA (what GPUI uploads), cropped to `source`.
+    pub fn image_bgra(&self, id: u32, source: [u32; 4]) -> Option<(u32, u32, Vec<u8>)> {
+        unsafe {
+            let mut g: GhosttyKittyGraphics = std::ptr::null_mut();
+            ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
+                &mut g as *mut _ as *mut c_void,
+            );
+            let img = (!g.is_null())
+                .then(|| ghostty_kitty_graphics_image(g, id))
+                .filter(|i| !i.is_null())?;
+            let (mut w, mut h, mut fmt) = (0u32, 0u32, GHOSTTY_KITTY_IMAGE_FORMAT_RGBA);
+            let (mut ptr, mut len): (*const u8, usize) = (std::ptr::null(), 0);
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
+                &mut w as *mut _ as *mut c_void,
+            );
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
+                &mut h as *mut _ as *mut c_void,
+            );
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
+                &mut fmt as *mut _ as *mut c_void,
+            );
+            if ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
+                &mut ptr as *mut _ as *mut c_void,
+            ) != GHOSTTY_SUCCESS
+                || ptr.is_null()
+            {
+                return None;
+            }
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
+                &mut len as *mut _ as *mut c_void,
+            );
+            let px = std::slice::from_raw_parts(ptr, len);
+            let bpp = match fmt {
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGB => 3,
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA => 2,
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY => 1,
+                _ => 4,
+            };
+            let [sx, sy, sw, sh] = source;
+            let (sw, sh) = (sw.min(w.saturating_sub(sx)), sh.min(h.saturating_sub(sy)));
+            if sw == 0 || sh == 0 {
+                return None;
+            }
+            let mut out = Vec::with_capacity((sw * sh * 4) as usize);
+            for y in sy..sy + sh {
+                for x in sx..sx + sw {
+                    let i = ((y * w + x) as usize) * bpp;
+                    let p = px.get(i..i + bpp)?;
+                    let (r, g, b, a) = match bpp {
+                        4 => (p[0], p[1], p[2], p[3]),
+                        3 => (p[0], p[1], p[2], 255),
+                        2 => (p[0], p[0], p[0], p[1]),
+                        _ => (p[0], p[0], p[0], 255),
+                    };
+                    out.extend_from_slice(&[b, g, r, a]);
+                }
+            }
+            Some((sw, sh, out))
+        }
+    }
+
     pub fn write(&mut self, bytes: &[u8]) {
         unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
     }
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols.max(1);
         self.rows = rows.max(1);
-        unsafe { ghostty_terminal_resize(self.term, self.cols, self.rows, 1, 1) };
+        unsafe { ghostty_terminal_resize(self.term, self.cols, self.rows, 1, 2) };
     }
     pub fn frame(&mut self) -> Frame {
         unsafe {
@@ -152,12 +406,110 @@ impl Vt {
                 &mut cursor as *mut _ as *mut c_void,
             );
             ghostty_render_state_clean(self.state);
-            Frame {
+            let mut frame = Frame {
                 rows,
                 cursor: (cursor.visible && cursor.viewport_has_value)
                     .then_some((cursor.viewport_x, cursor.viewport_y)),
                 bg: colors.background.into(),
+            };
+            self.paint_images(&mut frame);
+            frame
+        }
+    }
+    fn paint_images(&self, frame: &mut Frame) {
+        for placement in self.placements() {
+            let Some((w, h, pixels)) = self.image_bgra(placement.image, placement.source) else {
+                continue;
+            };
+            let width = placement.width.max(1);
+            let height = placement.height.div_ceil(2).max(1);
+            for y in 0..height.min(u32::from(self.rows)) {
+                for x in 0..width.min(u32::from(self.cols)) {
+                    let col = placement.col + x as i32;
+                    let row = placement.row + y as i32;
+                    if col < 0 || row < 0 {
+                        continue;
+                    }
+                    let Some(cell) = frame
+                        .rows
+                        .get_mut(row as usize)
+                        .and_then(|r| r.get_mut(col as usize))
+                    else {
+                        continue;
+                    };
+                    if placement.z < 0 && !cell.text.is_empty() {
+                        continue;
+                    }
+                    let sample = |part: u32| {
+                        let sx = x * w / width;
+                        let sy = ((y * 2 + part) * h / (height * 2)).min(h - 1);
+                        let i = ((sy * w + sx) * 4) as usize;
+                        let alpha = u32::from(pixels[i + 3]);
+                        let bg = cell.bg.unwrap_or(frame.bg);
+                        let mix = |v: u8, b: u8| {
+                            ((u32::from(v) * alpha + u32::from(b) * (255 - alpha)) / 255) as u8
+                        };
+                        Rgb(
+                            mix(pixels[i + 2], bg.0),
+                            mix(pixels[i + 1], bg.1),
+                            mix(pixels[i], bg.2),
+                        )
+                    };
+                    let top = sample(0);
+                    let bottom = sample(1);
+                    *cell = Cell {
+                        text: "▀".into(),
+                        fg: top,
+                        bg: Some(bottom),
+                        ..Cell::default()
+                    };
+                }
             }
+        }
+    }
+
+    pub fn scroll_position(&self) -> (u64, u64) {
+        unsafe {
+            let mut bar = GhosttyTerminalScrollbar::default();
+            ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_SCROLLBAR,
+                &mut bar as *mut _ as *mut c_void,
+            );
+            (bar.offset, bar.total)
+        }
+    }
+    pub fn scroll_row(&mut self, row: u64) {
+        let mut scroll = GhosttyTerminalScrollViewport {
+            tag: GHOSTTY_SCROLL_VIEWPORT_ROW,
+            ..Default::default()
+        };
+        scroll.value.row = row as usize;
+        unsafe { ghostty_terminal_scroll_viewport(self.term, scroll) };
+    }
+    pub fn hyperlink(&self, x: u16, y: u16) -> Option<String> {
+        unsafe {
+            let mut point = GhosttyPoint {
+                tag: GHOSTTY_POINT_TAG_VIEWPORT,
+                ..Default::default()
+            };
+            point.value.coordinate = GhosttyPointCoordinate { x, y: y as u32 };
+            let mut reference = GhosttyGridRef {
+                size: std::mem::size_of::<GhosttyGridRef>(),
+                ..Default::default()
+            };
+            if ghostty_terminal_grid_ref(self.term, point, &mut reference) != GHOSTTY_SUCCESS {
+                return None;
+            }
+            let mut bytes = vec![0; 4096];
+            let mut len = 0;
+            if ghostty_grid_ref_hyperlink_uri(&reference, bytes.as_mut_ptr(), bytes.len(), &mut len)
+                != GHOSTTY_SUCCESS
+                || len == 0
+            {
+                return None;
+            }
+            String::from_utf8(bytes[..len].to_vec()).ok()
         }
     }
     unsafe fn read_cell(&mut self, fg_default: Rgb, bg_default: Rgb) -> Cell {
@@ -451,8 +803,22 @@ impl Drop for Vt {
 mod tests {
     use super::*;
     #[test]
+    fn graphics_and_links_remain_inside_terminal_cells() {
+        let mut vt = Vt::new(20, 4);
+        vt.write(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\");
+        assert_eq!(vt.hyperlink(0, 0).as_deref(), Some("https://example.com"));
+        vt.write(b"\x1b[2;1H\x1b_Ga=T,f=32,s=1,v=1,c=2,r=1;/wAA/w==\x1b\\");
+        let frame = vt.frame();
+        assert_eq!(frame.rows[1][0].text, "▀");
+        assert_eq!(frame.rows[1][0].fg, Rgb(255, 0, 0));
+    }
+    #[test]
     fn unicode_colors_cursor_and_alternate_screen() {
         let mut vt = Vt::new(20, 4);
+        vt.write(b"X");
+        let initial = vt.frame();
+        assert_ne!(initial.rows[0][0].fg, initial.bg);
+        vt.write(b"\r\x1b[2K");
         vt.write("\x1b[38;2;1;2;3m界e\u{301}".as_bytes());
         let frame = vt.frame();
         assert_eq!(frame.rows[0][0].text, "界");

@@ -21,10 +21,10 @@ pub fn panes(root: &Value, area: Rect, focused: Option<&str>, zoomed: Option<&st
     if let Some(id) = zoomed
         && let Some(node) = find(root, id)
     {
-        collect(node, area, focused, &mut result);
+        collect(node, area, focused, &mut result, &mut vec![]);
         return result;
     }
-    collect(root, area, focused, &mut result);
+    collect(root, area, focused, &mut result, &mut vec![]);
     result
 }
 pub fn find<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
@@ -43,7 +43,34 @@ pub fn first(node: &Value) -> Option<&str> {
         node["children"].as_array()?.iter().find_map(first)
     }
 }
-fn collect(node: &Value, area: Rect, focused: Option<&str>, result: &mut Vec<Pane>) {
+pub struct Splitter {
+    pub id: String,
+    pub vertical: bool,
+    pub area: Rect,
+    pub extent: u16,
+    pub total: u16,
+    pub other_weight: f64,
+    pub weight: f64,
+}
+impl Splitter {
+    pub fn resized_weight(&self, delta: i32) -> f64 {
+        let extent = (i32::from(self.extent) + delta).clamp(1, i32::from(self.total).max(2) - 1);
+        (self.other_weight * f64::from(extent) / f64::from(i32::from(self.total) - extent))
+            .max(0.05)
+    }
+}
+pub fn splitters(root: &Value, area: Rect, focused: Option<&str>) -> Vec<Splitter> {
+    let mut result = vec![];
+    collect(root, area, focused, &mut vec![], &mut result);
+    result
+}
+fn collect(
+    node: &Value,
+    area: Rect,
+    focused: Option<&str>,
+    result: &mut Vec<Pane>,
+    splitters: &mut Vec<Splitter>,
+) {
     if area.is_empty() {
         return;
     }
@@ -78,7 +105,7 @@ fn collect(node: &Value, area: Rect, focused: Option<&str>, result: &mut Vec<Pan
             })
             .or_else(|| children.first())
         {
-            collect(child, area, focused, result);
+            collect(child, area, focused, result, splitters);
         }
         return;
     }
@@ -118,7 +145,32 @@ fn collect(node: &Value, area: Rect, focused: Option<&str>, result: &mut Vec<Pan
                 area.height,
             )
         };
-        collect(child, child_area, focused, result);
+        if index + 1 < children.len() {
+            splitters.push(Splitter {
+                id: child["id"].as_str().unwrap_or("").into(),
+                vertical,
+                area: if vertical {
+                    Rect::new(
+                        child_area.x,
+                        child_area.bottom().saturating_sub(1),
+                        child_area.width,
+                        1,
+                    )
+                } else {
+                    Rect::new(
+                        child_area.right().saturating_sub(1),
+                        child_area.y,
+                        1,
+                        child_area.height,
+                    )
+                },
+                extent: end.saturating_sub(consumed),
+                total,
+                other_weight: sum - weights[index],
+                weight: weights[index],
+            });
+        }
+        collect(child, child_area, focused, result, splitters);
         consumed = end;
     }
 }
@@ -126,6 +178,21 @@ fn collect(node: &Value, area: Rect, focused: Option<&str>, result: &mut Vec<Pan
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn nested_dividers_resize_the_correct_axis_and_container() {
+        let root = json!({"type":"row","children":[
+            {"type":"column","id":"col","children":[{"type":"block","id":"a"},{"type":"block","id":"b"}]},
+            {"type":"block","id":"c"}]});
+        let dividers = splitters(&root, Rect::new(0, 0, 100, 40), None);
+        assert_eq!(dividers[0].id, "col");
+        assert!(!dividers[0].vertical);
+        assert_eq!(dividers[0].area, Rect::new(49, 0, 1, 40));
+        assert!((dividers[0].resized_weight(10) - 1.5).abs() < 0.001);
+        assert_eq!(dividers[1].id, "a");
+        assert!(dividers[1].vertical);
+        assert_eq!(dividers[1].area, Rect::new(0, 19, 50, 1));
+        assert!((dividers[1].resized_weight(10) - 3.0).abs() < 0.001);
+    }
     #[test]
     fn weighted_layout_and_private_stack_focus() {
         let root = json!({"type":"row","children":[{"type":"block","id":"a","size":{"weight":1}},{"type":"stack","size":{"weight":2},"children":[{"type":"block","id":"b"},{"type":"block","id":"c"}]}]});

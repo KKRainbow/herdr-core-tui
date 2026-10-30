@@ -52,10 +52,8 @@ enum Hit {
     Agent(String),
 }
 struct ResizeDrag {
-    pane: String,
+    splitter: layout::Splitter,
     origin: u16,
-    width: u16,
-    weight: f64,
     value: f64,
 }
 pub struct Workspace {

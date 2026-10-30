@@ -248,37 +248,51 @@ impl Workspace {
             Event::Mouse(mut mouse) => {
                 if let Some(drag) = &mut self.drag {
                     if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
-                        let width = (i32::from(drag.width) + i32::from(mouse.column)
-                            - i32::from(drag.origin))
-                        .max(3) as f64;
-                        drag.value = (drag.weight * width / f64::from(drag.width.max(1))).max(0.05);
+                        let position = if drag.splitter.vertical {
+                            mouse.row
+                        } else {
+                            mouse.column
+                        };
+                        drag.value = drag
+                            .splitter
+                            .resized_weight(i32::from(position) - i32::from(drag.origin));
                         self.notice = format!("Resize weight {:.2}; release to apply", drag.value);
                         return Ok(false);
                     }
                     if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
                         let drag = self.drag.take().unwrap();
-                        self.command("pane.resize", json!({"id":drag.pane,"weight":drag.value}))
-                            .await?;
+                        self.command(
+                            "pane.resize",
+                            json!({"id":drag.splitter.id,"weight":drag.value}),
+                        )
+                        .await?;
                         return Ok(false);
                     }
                 }
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                    && let Some(pane) = self.panes.iter().find(|p| {
-                        mouse.column == p.area.right().saturating_sub(1)
-                            && mouse.row > p.area.y
-                            && mouse.row < p.area.bottom().saturating_sub(1)
-                    })
+                    && self.peek.is_none()
+                    && self.view().zoomed.is_none()
+                    && let Some(doc) = self.document()
+                    && let Some(root) = self
+                        .view()
+                        .active_tab
+                        .as_deref()
+                        .and_then(|id| doc.node(id))
+                        .and_then(|t| t.get("root"))
+                    && let Some(area) = self.panes.iter().map(|p| p.area).reduce(|a, b| a.union(b))
+                    && let Some(splitter) =
+                        layout::splitters(root, area, self.view().focused.as_deref())
+                            .into_iter()
+                            .find(|s| s.area.contains((mouse.column, mouse.row).into()))
                 {
-                    let weight = self
-                        .document()
-                        .and_then(|d| d.node(&pane.id).and_then(|n| n["size"]["weight"].as_f64()))
-                        .unwrap_or(1.0);
                     self.drag = Some(ResizeDrag {
-                        pane: pane.id.clone(),
-                        origin: mouse.column,
-                        width: pane.area.width,
-                        weight,
-                        value: weight,
+                        origin: if splitter.vertical {
+                            mouse.row
+                        } else {
+                            mouse.column
+                        },
+                        value: splitter.weight,
+                        splitter,
                     });
                     return Ok(false);
                 }

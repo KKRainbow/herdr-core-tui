@@ -412,7 +412,9 @@ pub struct WorktreeCreate {
     pub repository: String,
     pub branch: TextEditor,
     pub new_branch: bool,
-    pub checkout_path: String,
+    pub checkout_path: TextEditor,
+    pub path_focused: bool,
+    pub custom_path: bool,
     pub creating: bool,
     pub error: Option<String>,
 }
@@ -528,6 +530,8 @@ pub struct OverlayRender {
     pub worktree_rows: Vec<(Rect, usize)>,
     pub worktree_new_branch: Rect,
     pub worktree_existing_branch: Rect,
+    pub worktree_branch_input: Rect,
+    pub worktree_path_input: Rect,
     pub pane_move_rows: Vec<(Rect, String)>,
     pub help_max_scroll: usize,
     pub cursor: Option<Position>,
@@ -1421,26 +1425,36 @@ fn render_worktree_create(
         i.x,
         i.y + 2,
         i.width,
-        " branch name · tab switches new/existing",
+        " branch name · tab new/existing · ↑↓ branch/path",
         label,
     );
     let input = Rect::new(i.x, i.y + 3, i.width, 1);
     b.set_style(input, Style::default().fg(p.text).bg(p.surface0));
-    let cursor = render_editor(
+    let branch_cursor = render_editor(
         b,
         Rect::new(input.x + 1, input.y, input.width.saturating_sub(1), 1),
         &c.branch,
         Style::default().fg(p.text).bg(p.surface0),
     );
-    put_text(b, i.x, i.y + 5, i.width, " checkout", label);
-    put_text(
+    put_text(b, i.x, i.y + 5, i.width, " checkout path", label);
+    let path_input = Rect::new(i.x, i.y + 6, i.width, 1);
+    b.set_style(path_input, Style::default().fg(p.text).bg(p.surface0));
+    let path_cursor = render_editor(
         b,
-        i.x,
-        i.y + 6,
-        i.width,
-        &format!(" {}", c.checkout_path),
-        Style::default().fg(p.subtext0).bg(p.panel_bg),
+        Rect::new(
+            path_input.x + 1,
+            path_input.y,
+            path_input.width.saturating_sub(1),
+            1,
+        ),
+        &c.checkout_path,
+        Style::default().fg(p.text).bg(p.surface0),
     );
+    let cursor = if c.path_focused {
+        path_cursor
+    } else {
+        branch_cursor
+    };
     status_line(
         b,
         i,
@@ -1462,6 +1476,8 @@ fn render_worktree_create(
         cancel: *cancel,
         worktree_new_branch: *new_branch,
         worktree_existing_branch: *existing_branch,
+        worktree_branch_input: input,
+        worktree_path_input: path_input,
         cursor: cursor.filter(|_| !c.creating),
         ..OverlayRender::default()
     })

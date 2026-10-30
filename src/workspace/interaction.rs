@@ -73,7 +73,11 @@ impl Workspace {
             Overlay::Rename(r) => Some(&mut r.input),
             Overlay::Help(h) if h.search_focused => Some(&mut h.query),
             Overlay::Navigator(n) if n.search_focused => Some(&mut n.query),
-            Overlay::WorktreeCreate(c) if !c.creating => Some(&mut c.branch),
+            Overlay::WorktreeCreate(c) if !c.creating => Some(if c.path_focused {
+                &mut c.checkout_path
+            } else {
+                &mut c.branch
+            }),
             Overlay::WorktreeOpen(o) if o.search_focused => Some(&mut o.query),
             _ => None,
         }
@@ -82,8 +86,9 @@ impl Workspace {
     fn paste(&mut self, text: &str) -> Result<()> {
         let line = text.lines().next().unwrap_or("").to_owned();
         if let Some(editor) = self.overlay_editor() {
-            editor.insert(&line);
-            self.after_editor_change();
+            if editor.insert(&line) {
+                self.after_editor_change();
+            }
             return Ok(());
         }
         if self.overlay.is_some() {
@@ -110,13 +115,16 @@ impl Workspace {
                 }
             }
             Some(Overlay::WorktreeCreate(c)) => {
-                let base = c
-                    .checkout_path
-                    .rsplit_once('/')
-                    .map_or("", |(base, _)| base)
-                    .to_owned();
-                let slug = herdr_client_lib::worktrees::slug(c.branch.trim());
-                c.checkout_path = format!("{base}/{slug}");
+                if c.path_focused {
+                    c.custom_path = true;
+                } else if !c.custom_path {
+                    let base = c
+                        .checkout_path
+                        .rsplit_once('/')
+                        .map_or("", |(base, _)| base);
+                    let slug = herdr_client_lib::worktrees::slug(c.branch.trim());
+                    c.checkout_path = TextEditor::new(&format!("{base}/{slug}"), false);
+                }
                 c.error = None;
             }
             _ => {}
@@ -819,7 +827,9 @@ impl Workspace {
             repository,
             branch: TextEditor::new(&branch, false),
             new_branch: true,
-            checkout_path,
+            checkout_path: TextEditor::new(&checkout_path, false),
+            path_focused: false,
+            custom_path: false,
             creating: false,
             error: None,
         }));
@@ -902,7 +912,12 @@ impl Workspace {
             self.overlay = Some(Overlay::WorktreeCreate(create));
             return;
         }
-        let args = json!({"repository":create.repository,"branch":branch,"path":create.checkout_path,"new_branch":create.new_branch});
+        if create.checkout_path.trim().is_empty() {
+            create.error = Some("checkout path is required".into());
+            self.overlay = Some(Overlay::WorktreeCreate(create));
+            return;
+        }
+        let args = json!({"repository":create.repository,"branch":branch,"path":create.checkout_path.as_str(),"new_branch":create.new_branch});
         match self.command("worktree.new", args).await {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
@@ -1087,12 +1102,18 @@ impl Workspace {
                     create.error = None;
                     self.overlay = Some(Overlay::WorktreeCreate(create));
                 }
+                KeyCode::Up | KeyCode::Down if !create.creating => {
+                    create.path_focused = key.code == KeyCode::Down;
+                    self.overlay = Some(Overlay::WorktreeCreate(create));
+                }
                 _ => {
-                    if create.branch.handle_key(&key).is_some() {
-                        self.overlay = Some(Overlay::WorktreeCreate(create));
+                    self.overlay = Some(Overlay::WorktreeCreate(create));
+                    if self
+                        .overlay_editor()
+                        .and_then(|editor| editor.handle_key(&key))
+                        == Some(true)
+                    {
                         self.after_editor_change();
-                    } else {
-                        self.overlay = Some(Overlay::WorktreeCreate(create));
                     }
                 }
             },
@@ -2255,6 +2276,8 @@ impl Workspace {
         let worktree_search = contains(render.worktree_search, x, y);
         let new_branch = contains(render.worktree_new_branch, x, y);
         let existing_branch = contains(render.worktree_existing_branch, x, y);
+        let branch_input = contains(render.worktree_branch_input, x, y);
+        let path_input = contains(render.worktree_path_input, x, y);
         let pane_destination = render
             .pane_move_rows
             .iter()
@@ -2360,6 +2383,9 @@ impl Workspace {
                     if left && !create.creating && (new_branch || existing_branch) {
                         create.new_branch = new_branch;
                         create.error = None;
+                    }
+                    if left && !create.creating && (branch_input || path_input) {
+                        create.path_focused = path_input;
                     }
                     self.overlay = Some(Overlay::WorktreeCreate(create));
                 }

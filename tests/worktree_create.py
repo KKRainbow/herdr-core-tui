@@ -62,8 +62,8 @@ try:
         os.write(master, b"\x15" + branch.encode())
         read_for()
 
-    def verify(branch, count):
-        path = checkout_base / branch
+    def verify(branch, count, path=None):
+        path = path or checkout_base / branch
         end = time.monotonic() + 10
         while time.monotonic() < end:
             read_for()
@@ -77,8 +77,8 @@ try:
 
     wait_for(b"main")
     open_dialog("new-ui")
-    os.write(master, b"\r")
-    verify("new-ui", 2)
+    os.write(master, b"\x1b[B\x1b[D\x1b[C\x1b[A\x15new-default\r")
+    verify("new-default", 2)
 
     open_dialog("existing-key")
     os.write(master, b"\r")
@@ -92,10 +92,31 @@ try:
     read_for()
     os.write(master, b"\r")
     verify("existing-mouse", 4)
-    assert len(git("worktree", "list", "--porcelain").split("worktree ")) - 1 == 4
+    custom_path = repo / "custom checkout"
+    open_dialog("custom-draft")
+    os.write(master, b"\x1b[B\x15\r")
+    wait_for(b"checkout path is required")
+    assert not (checkout_base / "custom-draft").exists()
+    os.write(master, b"\x1b[200~" + str(custom_path).encode() + b"\x1b[201~")
+    read_for()
+    os.write(master, b"\x1b[A\x15custom-final\r")
+    verify("custom-final", 5, custom_path)
+
+    mouse_path = repo / "mouse checkout"
+    git("branch", "custom-existing")
+    open_dialog("custom-existing")
+    os.write(master, b"\t\x1b[<0;30;14M\x1b[<0;30;14m")
+    read_for()
+    os.write(master, b"\x15" + str(mouse_path).encode())
+    read_for()
+    os.write(master, b"\x1b[<0;30;11M\x1b[<0;30;11m")
+    read_for()
+    os.write(master, b"\x15custom-existing\r")
+    verify("custom-existing", 6, mouse_path)
+    assert len(git("worktree", "list", "--porcelain").split("worktree ")) - 1 == 6
     os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
-    print("PASS: new branch default, existing branch retry with Tab, existing branch selection with mouse, branch commits preserved")
+    print("PASS: default paths follow branch edits, new/existing branches, custom paths via keyboard/paste/mouse, empty path retry, custom paths survive branch edits, branch commits preserved")
 finally:
     if process and process.poll() is None:
         process.kill()

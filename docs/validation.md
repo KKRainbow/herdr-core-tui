@@ -1,12 +1,18 @@
-# Initial terminal slice validation
+# Validation
 
-Validated on Linux with installed `hc` 0.1.14.
-The library passes `just check`: 22 tests, formatting, and lint.
-The TUI passes `just check`: two terminal behavior tests, formatting, and lint.
-The tests cover Unicode cells, true color, cursor position, alternate screen, resize, application cursor keys, bracketed paste, and SGR mouse encoding.
-The isolated PTY check covers initial repaint, normal detach, a second attach to the same live process, and host settings after normal exit and an attach error.
+## Single-terminal viewer
 
-Step 7 is not complete.
-Automatic reconnect, core geometry events, enhanced keyboard negotiation, and graphical app interoperability remain unverified or unimplemented.
-Error cleanup after a failure during an active attachment needs a dedicated failure test.
-Native macOS and Windows validation and performance profiling remain pending.
+Validated on Linux with installed `hc` 0.1.14 and unchanged installed `herdr-app` 0.1.8.
+The app test ran on a private headless Weston display with scratch app and core state.
+The installed app version matches the source baseline version; its exact build revision was not verified.
+The TUI passes formatting, lint, and three terminal behavior tests.
+The tests cover Unicode width, true color, cursor, alternate screen, resize, application cursor keys, bracketed paste, SGR mouse encoding, control keys, and Kitty release events.
+The isolated PTY check covers repaint, detach, repeated attach, host settings, and reconnect after core restart with a kept terminal.
+The app check covers an app-created terminal, TUI input to the same process, and app retention after TUI detach.
+Host cleanup uses a drop guard for returned errors and a panic hook.
+Attach failure is tested; a fault injected after terminal setup remains a separate validation task.
+
+## Remaining validation
+
+Workspace interaction, CLI targeting, packaging, and performance checks follow their implementation milestones.
+Native macOS and Windows validation is pending.

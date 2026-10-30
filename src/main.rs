@@ -1,3 +1,4 @@
+mod connection;
 mod input;
 mod vt;
 use crossterm::{
@@ -13,7 +14,6 @@ use ratatui::{
     backend::CrosstermBackend,
     style::{Color, Modifier, Style},
 };
-use serde_json::json;
 use std::{
     io::{self, stdout},
     time::Duration,
@@ -29,7 +29,11 @@ impl Host {
             EnterAlternateScreen,
             event::EnableBracketedPaste,
             event::EnableFocusChange,
-            event::EnableMouseCapture
+            event::EnableMouseCapture,
+            event::PushKeyboardEnhancementFlags(
+                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
         )?;
         Ok(guard)
     }
@@ -37,6 +41,7 @@ impl Host {
 fn restore() {
     let _ = execute!(
         stdout(),
+        event::PopKeyboardEnhancementFlags,
         event::DisableMouseCapture,
         event::DisableFocusChange,
         event::DisableBracketedPaste,
@@ -79,14 +84,9 @@ async fn run() -> Result<()> {
         session: args[1].clone(),
         environment: Default::default(),
     };
-    let client = config.connect(Duration::from_secs(10)).await?;
-    let (cols, rows) = terminal::size()?;
-    let (_, mut stream) = client
-        .attach(
-            json!({"terminal":args[2],"cols":cols,"rows":rows}),
-            Duration::from_secs(10),
-        )
-        .await?;
+    let mut size = terminal::size()?;
+    let mut connection =
+        Some(connection::Connection::connect(&config, &args[2], size, false).await?);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -94,31 +94,163 @@ async fn run() -> Result<()> {
     }));
     let _host = Host::enter()?;
     let mut screen = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let mut vt = vt::Vt::new(cols, rows);
+    let initial_size = connection.as_ref().unwrap().size();
+    let mut vt = vt::Vt::new(initial_size.0, initial_size.1);
     let mut events = EventStream::new();
-    stream.focus(true).await?;
+    let mut interrupt = Box::pin(tokio::signal::ctrl_c());
+    let mut focused = true;
+    let mut dirty = true;
+    let mut retry = tokio::time::interval(Duration::from_secs(1));
+    retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        draw(&mut screen, &mut vt)?;
-        tokio::select! {
-            output = stream.next() => match output? {
-                Some(StreamEvent::Data(bytes)) => {vt.write(&bytes); draw(&mut screen,&mut vt)?; stream.consumed(u32::try_from(bytes.len())?).await?;}
-                Some(StreamEvent::Closed(_)) | None => break,
+        if dirty {
+            draw(&mut screen, &mut vt)?;
+            dirty = false;
+        }
+        let Some(current) = connection.as_mut() else {
+            tokio::select! {
+                _=&mut interrupt=>break,
+                result=connection::Connection::connect(&config,&args[2],size,true)=> {
+                    match result {
+                        Ok(new)=>{let dimensions=new.size();vt=vt::Vt::new(dimensions.0,dimensions.1);connection=Some(new);dirty=true;}
+                        Err(_)=>{tokio::select! { _=retry.tick()=>{}, event=events.next()=>{if handle_offline(event, &mut size)? {break;}} }}
+                    }
+                }
+                event=events.next()=>{if handle_offline(event, &mut size)? {break;}}
+            }
+            continue;
+        };
+        enum Next {
+            Output(std::result::Result<Option<StreamEvent>, herdr_client_lib::client::Error>),
+            Notification(std::result::Result<Option<StreamEvent>, herdr_client_lib::client::Error>),
+            Host(Option<io::Result<Event>>),
+            Retry,
+        }
+        let next = tokio::select! {
+            _=&mut interrupt=>break,
+            output=async {match &mut current.stream {Some(stream)=>stream.next().await,None=>std::future::pending().await}}=>Next::Output(output),
+            notification=current.events.next()=>Next::Notification(notification),
+            event=events.next()=>Next::Host(event),
+            _=retry.tick(), if current.stream.is_none()=>Next::Retry,
+        };
+        match next {
+            Next::Output(Ok(Some(StreamEvent::Data(bytes)))) => {
+                vt.write(&bytes);
+                draw(&mut screen, &mut vt)?;
+                if current
+                    .stream
+                    .as_ref()
+                    .unwrap()
+                    .consumed(bytes.len() as u32)
+                    .await
+                    .is_err()
+                {
+                    connection = None;
+                }
+            }
+            Next::Output(Ok(Some(StreamEvent::Closed(_)) | None)) => {
+                current.stream = None;
+                if current.record["keep"] != true {
+                    break;
+                }
+            }
+            Next::Output(Err(_)) | Next::Notification(Err(_) | Ok(None)) => {
+                connection = None;
+            }
+            Next::Notification(Ok(Some(event))) => match current.notification(event).await {
+                Ok(changed) => {
+                    if changed {
+                        let dimensions = current.size();
+                        vt.resize(dimensions.0, dimensions.1);
+                        dirty = true;
+                    }
+                }
+                Err(_) => connection = None,
             },
-            event = events.next() => match event.transpose()? {
-                None => break,
-                Some(Event::Key(key)) if key.code==KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                Some(Event::Key(key)) => {vt.scroll_to_bottom(); let bytes=input::key(&mut vt,key); if !bytes.is_empty(){stream.input(bytes).await?;}}
-                Some(Event::Paste(text)) => stream.input(vt.paste_bytes(&text)).await?,
-                Some(Event::Resize(cols,rows)) => {vt.resize(cols,rows); stream.resize(cols,rows).await?;}
-                Some(Event::FocusGained) => stream.focus(true).await?,
-                Some(Event::FocusLost) => stream.focus(false).await?,
-                Some(Event::Mouse(mouse)) => {let bytes=input::mouse(&mut vt,mouse); if !bytes.is_empty(){stream.input(bytes).await?;}}
+            Next::Retry => {
+                if current.record["state"] == "finished" {
+                    break;
+                }
+                if current.attach(size).await.is_ok() {
+                    let dimensions = current.size();
+                    vt = vt::Vt::new(dimensions.0, dimensions.1);
+                    dirty = true;
+                }
+            }
+            Next::Host(event) => {
+                let Some(event) = event.transpose()? else {
+                    break;
+                };
+                if is_quit(&event) {
+                    break;
+                }
+                if let Event::Resize(cols, rows) = event {
+                    size = (cols.max(1), rows.max(1));
+                }
+                if let Event::FocusLost = event {
+                    focused = false;
+                }
+                if let Event::FocusGained = event {
+                    focused = true;
+                }
+                let Some(stream) = current.stream.as_ref() else {
+                    continue;
+                };
+                let result = match event {
+                    Event::Key(key) => {
+                        vt.scroll_to_bottom();
+                        dirty = true;
+                        let bytes = input::key(&mut vt, key);
+                        if bytes.is_empty() {
+                            Ok(())
+                        } else {
+                            stream.input(bytes).await
+                        }
+                    }
+                    Event::Paste(text) => stream.input(vt.paste_bytes(&text)).await,
+                    Event::Resize(_, _) if focused => stream.resize(size.0, size.1).await,
+                    Event::FocusGained => {
+                        stream.resize(size.0, size.1).await?;
+                        stream.focus(true).await
+                    }
+                    Event::FocusLost => stream.focus(false).await,
+                    Event::Mouse(mouse) => {
+                        let bytes = input::mouse(&mut vt, mouse);
+                        dirty = true;
+                        if bytes.is_empty() {
+                            Ok(())
+                        } else {
+                            stream.input(bytes).await
+                        }
+                    }
+                    _ => Ok(()),
+                };
+                if result.is_err() {
+                    connection = None;
+                }
             }
         }
     }
-    stream.detach().await?;
+    if let Some(current) = connection
+        && let Some(stream) = current.stream
+    {
+        let _ = stream.detach().await;
+    }
     Ok(())
 }
+fn is_quit(event: &Event) -> bool {
+    matches!(event,Event::Key(key) if key.kind!=event::KeyEventKind::Release && key.code==KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL))
+}
+fn handle_offline(event: Option<io::Result<Event>>, size: &mut (u16, u16)) -> io::Result<bool> {
+    let Some(event) = event.transpose()? else {
+        return Ok(true);
+    };
+    if let Event::Resize(cols, rows) = event {
+        *size = (cols.max(1), rows.max(1));
+    }
+    Ok(is_quit(&event))
+}
+
 fn draw(screen: &mut Terminal<CrosstermBackend<io::Stdout>>, vt: &mut vt::Vt) -> io::Result<()> {
     let snapshot = vt.frame();
     screen.draw(|frame| {

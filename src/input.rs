@@ -18,9 +18,6 @@ fn mods(m: KeyModifiers) -> GhosttyMods {
     bits
 }
 pub fn key(vt: &mut Vt, event: KeyEvent) -> Vec<u8> {
-    if event.kind == KeyEventKind::Release {
-        return vec![];
-    }
     let text = if let KeyCode::Char(c) = event.code {
         Some(c.to_string())
     } else {
@@ -53,7 +50,7 @@ pub fn key(vt: &mut Vt, event: KeyEvent) -> Vec<u8> {
     if event.code == KeyCode::BackTab {
         modifiers |= GHOSTTY_MODS_SHIFT as u16;
     }
-    vt.encode_key(
+    vt.encode_key_action(
         key,
         modifiers,
         modifiers & GHOSTTY_MODS_SHIFT as u16,
@@ -61,6 +58,11 @@ pub fn key(vt: &mut Vt, event: KeyEvent) -> Vec<u8> {
         text.as_ref()
             .and_then(|s| s.chars().next())
             .map(|c| c.to_ascii_lowercase()),
+        match event.kind {
+            KeyEventKind::Press => GHOSTTY_KEY_ACTION_PRESS,
+            KeyEventKind::Repeat => GHOSTTY_KEY_ACTION_REPEAT,
+            KeyEventKind::Release => GHOSTTY_KEY_ACTION_RELEASE,
+        },
     )
 }
 pub fn mouse(vt: &mut Vt, event: MouseEvent) -> Vec<u8> {
@@ -112,4 +114,39 @@ pub fn mouse(vt: &mut Vt, event: MouseEvent) -> Vec<u8> {
         (vt.cols as u32, vt.rows as u32, 1.0, 1.0),
         matches!(event.kind, MouseEventKind::Drag(_)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn controls_unicode_and_kitty_releases() {
+        let mut vt = Vt::new(80, 24);
+        assert_eq!(
+            key(
+                &mut vt,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            b"\x03"
+        );
+        assert_eq!(
+            key(
+                &mut vt,
+                KeyEvent::new(KeyCode::Char('界'), KeyModifiers::NONE)
+            ),
+            "界".as_bytes()
+        );
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert!(key(&mut vt, release).is_empty());
+        vt.write(b"\x1b[>3u");
+        assert!(
+            String::from_utf8(key(&mut vt, release))
+                .unwrap()
+                .contains(":3")
+        );
+    }
 }

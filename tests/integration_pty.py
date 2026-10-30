@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix="herder-tui-test-") as root:
     def core(*args):
         return subprocess.check_output([hc, *args], env=env, timeout=15)
     try:
-        terminal = json.loads(core("run", "--json", "--bg", "sh", "-c", "printf TUI_FIXTURE; cat"))
+        terminal = json.loads(core("run", "--json", "--bg", "--keep", "sh", "-c", "printf TUI_FIXTURE; cat"))
         address = terminal["address"]
         for target, expected in [(address, 0), (address, 0), ("missing-terminal", 1)]:
             master, slave = pty.openpty()
@@ -52,6 +52,32 @@ with tempfile.TemporaryDirectory(prefix="herder-tui-test-") as root:
                 os.close(master)
                 os.close(slave)
         assert b'live' in core("get", address), "detach ended the shared terminal"
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        original = termios.tcgetattr(slave)
+        process = subprocess.Popen([str(binary), "--session", env["HC_SESSION"], address], env=env, stdin=slave, stdout=slave, stderr=slave)
+        def await_output(marker):
+            output = b""
+            deadline = time.monotonic() + 15
+            while marker not in output and time.monotonic() < deadline:
+                if select.select([master], [], [], .1)[0]:
+                    output += os.read(master, 65536)
+            assert marker in output, output[-2000:]
+        try:
+            await_output(b"TUI_FIXTURE")
+            core("server", "restart")
+            time.sleep(2)
+            core("send", address, "printf RECOVERY_OK")
+            await_output(b"RECOVERY_OK")
+            os.write(master, b"\x11")
+            assert process.wait(timeout=5) == 0
+            assert termios.tcgetattr(slave) == original
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
         core("kill", address)
         print("PASS: stream repaint, detach, live process, normal/error host restoration")
     finally:

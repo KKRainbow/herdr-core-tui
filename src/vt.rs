@@ -247,6 +247,7 @@ impl Vt {
         }
     }
 
+    #[cfg(test)]
     pub fn encode_key(
         &mut self,
         key: GhosttyKey,
@@ -255,10 +256,30 @@ impl Vt {
         text: Option<&str>,
         unshifted: Option<char>,
     ) -> Vec<u8> {
+        self.encode_key_action(
+            key,
+            mods,
+            consumed,
+            text,
+            unshifted,
+            GHOSTTY_KEY_ACTION_PRESS,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_key_action(
+        &mut self,
+        key: GhosttyKey,
+        mods: GhosttyMods,
+        consumed: GhosttyMods,
+        text: Option<&str>,
+        unshifted: Option<char>,
+        action: GhosttyKeyAction,
+    ) -> Vec<u8> {
         unsafe {
             ghostty_key_encoder_setopt_from_terminal(self.keys, self.term);
             let e = self.key_event;
-            ghostty_key_event_set_action(e, GHOSTTY_KEY_ACTION_PRESS);
+            ghostty_key_event_set_action(e, action);
             ghostty_key_event_set_key(e, key);
             ghostty_key_event_set_mods(e, mods);
             let printable =

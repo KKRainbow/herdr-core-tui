@@ -1,5 +1,6 @@
 //! Agent notification sounds, adapted from Herdr `src/sound.rs`.
 //! The mp3 files are Herdr's own; a system player decodes them, so no audio crate is linked.
+use herdr_client_lib::model::Alert;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -22,17 +23,12 @@ pub enum Sound {
     Request,
 }
 
-/// Herdr's rule: a question always sounds; a finish sounds unless the viewer is watching it.
-pub fn for_change(previous: Option<&str>, current: Option<&str>, watched: bool) -> Option<Sound> {
-    let busy = |word: Option<&str>| matches!(word, Some("working" | "blocked" | "error"));
-    let blocked = |word: Option<&str>| matches!(word, Some("blocked" | "error"));
-    if previous == current {
-        return None;
+/// The sound for one of Herdr's attention alerts.
+pub fn for_alert(alert: Alert) -> Sound {
+    match alert {
+        Alert::Blocked => Sound::Request,
+        Alert::Done => Sound::Done,
     }
-    if blocked(current) {
-        return Some(Sound::Request);
-    }
-    (matches!(current, Some("idle" | "done")) && busy(previous) && !watched).then_some(Sound::Done)
 }
 
 /// Plays a sound in the background; a missing player or a failure stays silent.
@@ -115,29 +111,28 @@ fn run_player(path: &Path) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use herdr_client_lib::model::alert;
 
     #[test]
     fn questions_always_sound_and_finishes_only_when_unwatched() {
+        let sound = |prev, new, watched| alert(prev, new, watched).map(for_alert);
         assert_eq!(
-            for_change(Some("working"), Some("blocked"), true),
+            sound(Some("working"), Some("blocked"), true),
             Some(Sound::Request)
         );
+        assert_eq!(sound(None, Some("blocked"), false), Some(Sound::Request));
         assert_eq!(
-            for_change(None, Some("blocked"), false),
-            Some(Sound::Request)
-        );
-        assert_eq!(
-            for_change(Some("working"), Some("idle"), false),
+            sound(Some("working"), Some("idle"), false),
             Some(Sound::Done)
         );
         assert_eq!(
-            for_change(Some("blocked"), Some("done"), false),
+            sound(Some("blocked"), Some("done"), false),
             Some(Sound::Done)
         );
-        assert_eq!(for_change(Some("working"), Some("idle"), true), None);
-        assert_eq!(for_change(None, Some("idle"), false), None);
-        assert_eq!(for_change(Some("idle"), Some("idle"), false), None);
-        assert_eq!(for_change(Some("blocked"), Some("blocked"), false), None);
+        assert_eq!(sound(Some("working"), Some("idle"), true), None);
+        assert_eq!(sound(None, Some("idle"), false), None);
+        assert_eq!(sound(Some("idle"), Some("idle"), false), None);
+        assert_eq!(sound(Some("blocked"), Some("blocked"), false), None);
     }
 
     #[test]

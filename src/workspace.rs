@@ -23,10 +23,11 @@ use futures_util::{StreamExt, future::select_all};
 use herdr_client_lib::{
     client::{Error, Stream, StreamEvent},
     commands::qualify,
+    model,
     protocol::{MachineList, Notification},
     sync::Session,
     transport::HcConfig,
-    view::{Identity, View},
+    view::View,
 };
 use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use serde_json::{Value, json};
@@ -93,9 +94,7 @@ pub struct Workspace {
     renders: u64,
     parsed_bytes: u64,
     attention: herdr_client_lib::view::Attention,
-    sequences: BTreeMap<Identity, u64>,
-    words: BTreeMap<Identity, Option<String>>,
-    sequence: u64,
+    listed_once: bool,
     drag: Option<Drag>,
     pub session: Session,
     pub views: BTreeMap<String, View>,
@@ -188,9 +187,6 @@ impl Workspace {
     }
 
     fn reconcile(&mut self) {
-        let active = self
-            .active_id()
-            .and_then(|id| self.surfaces.get(&id).map(|s| s.address.clone()));
         let visible: HashSet<String> = self
             .panes
             .iter()
@@ -203,29 +199,44 @@ impl Workspace {
                 })
             })
             .collect();
+        let placed: HashSet<String> = self
+            .session
+            .documents
+            .iter()
+            .filter_map(|(machine, slot)| Some(model::places(slot.document.as_ref()?, machine)))
+            .flat_map(|places| places.into_keys())
+            .collect();
         let mut sounds = BTreeSet::new();
+        let mut looked_at = Vec::new();
         for (identity, record) in &self.session.terminals {
-            let word = snapshot::word(record).map(str::to_owned);
-            // Only changes seen while running sound; an agent already waiting at startup does not.
-            if let Some(previous) = self.words.get(identity) {
-                let watched = self.focused && visible.contains(&record.address);
-                sounds.extend(crate::sound::for_change(
-                    previous.as_deref(),
-                    word.as_deref(),
-                    watched,
-                ));
-            }
-            if self.words.get(identity) != Some(&word) {
-                self.sequence += 1;
-                self.sequences.insert(identity.clone(), self.sequence);
-                self.words.insert(identity.clone(), word.clone());
-            }
-            self.attention.observe(
-                identity.clone(),
-                word,
-                Some(record.address.as_str()) == active.as_deref(),
+            let word = record.word().map(str::to_owned);
+            let app = record
+                .status
+                .as_ref()
+                .map(|s| s.app.clone())
+                .filter(|s| !s.is_empty());
+            let looking = self.focused && visible.contains(&record.address);
+            let sub_agent = record.parent.as_deref().is_some_and(|p| !p.is_empty());
+            let alert = self.attention.alert_for(
+                identity,
+                placed.contains(&record.address),
+                sub_agent,
+                word.as_deref(),
+                looking,
             );
+            // Changes already made before this viewer started aren't news.
+            if self.listed_once {
+                sounds.extend(alert.map(crate::sound::for_alert));
+            }
+            self.attention.set_word(identity, word, app, looking);
+            if looking {
+                looked_at.push(identity.clone());
+            }
         }
+        self.listed_once = true;
+        self.attention.mark_seen(&looked_at);
+        let terminals = &self.session.terminals;
+        self.attention.retain(|id| terminals.contains_key(id));
         if self.preferences.sound.enabled {
             for sound in sounds {
                 crate::sound::play(sound, self.preferences.sound.path(sound));
@@ -250,11 +261,12 @@ impl Workspace {
     fn focus(&mut self, id: &str) {
         if let Some(doc) = self.document() {
             let before = self.view().focused;
-            self.view_mut().focus(&doc, id);
-            if let Some(view) = self.views.get_mut(&self.view_id())
-                && view.zoomed.is_some()
-            {
-                view.zoomed = view.focused.clone();
+            let view = self.view_mut();
+            view.focus(&doc, id);
+            // Zoom follows focus inside a zoomed tab, as in Herdr.
+            if view.zoomed.is_some() {
+                let focused = view.focused.clone();
+                view.zoom(focused.as_deref());
             }
             if before.as_deref() != Some(id) && before.is_some() {
                 self.previous_pane = before.clone();
@@ -280,9 +292,9 @@ impl Workspace {
     /// Focuses a space or tab at the pane its viewer last used there.
     fn focus_container(&mut self, id: &str) {
         if let Some(doc) = self.document()
-            && let Some(pane) = remembered_pane(&self.view(), &doc, id)
+            && let Some(pane) = self.view().remembered(&doc, id)
         {
-            self.focus(pane);
+            self.focus(&pane);
         }
     }
     fn check_pane_action(&self, command: &str) -> Result<()> {
@@ -348,13 +360,18 @@ impl Workspace {
     fn refresh_snapshot(&mut self) {
         let doc = self.document();
         let view = self.view();
+        let home = if self.machine.is_empty() {
+            std::env::var("HOME").unwrap_or_default()
+        } else {
+            String::new()
+        };
         self.snapshot = snapshot::build(&snapshot::Sources {
             document: doc.as_ref().map(|d| d.value()),
             view: &view,
             machine: &self.machine,
             terminals: &self.session.terminals,
             attention: &self.attention,
-            sequences: &self.sequences,
+            home: &home,
             git: &self.git,
             peek: self.peek.as_deref(),
         });
@@ -503,14 +520,14 @@ impl Workspace {
         if matches!(command, "pane.focus" | "tab.focus" | "space.focus") {
             let id = args["id"].as_str().ok_or("id is required")?;
             let doc = self.document().ok_or("Document unavailable")?;
-            let node = doc.node(id).ok_or("Target unavailable")?;
+            doc.node(id).ok_or("Target unavailable")?;
             let pane = if command == "pane.focus" {
-                Some(id)
+                Some(id.to_owned())
             } else {
-                remembered_pane(&self.view(), &doc, id).or_else(|| layout::first(&node["root"]))
+                self.view().remembered(&doc, id)
             }
             .ok_or("Target has no pane")?;
-            self.focus(pane);
+            self.focus(&pane);
             return Ok(json!({"ok":true}));
         }
         if matches!(command, "agent.focus" | "terminal.focus") {
@@ -671,28 +688,6 @@ async fn git_info(git: &herdr_client_lib::worktrees::Git, cwd: &str) -> Option<G
     Some(info)
 }
 
-fn remembered_pane<'a>(
-    view: &View,
-    doc: &'a herdr_client_lib::document::Document,
-    target: &str,
-) -> Option<&'a str> {
-    for id in view.focused.iter().chain(view.history.iter().rev()) {
-        if doc
-            .location(id)
-            .is_some_and(|(space, tab)| space == target || tab == target)
-        {
-            return doc.node(id).and_then(|n| n["id"].as_str());
-        }
-    }
-    let node = doc.node(target)?;
-    layout::first(&node["root"]).or_else(|| {
-        node["tabs"]
-            .as_array()?
-            .iter()
-            .find_map(|t| layout::first(&t["root"]))
-    })
-}
-
 fn agent_pane(node: &Value, address: &str, machine: &str) -> Option<String> {
     if node["type"] == "block"
         && node["content"]["terminal"]
@@ -777,9 +772,7 @@ pub async fn run(
         renders: 0,
         parsed_bytes: 0,
         attention: Default::default(),
-        sequences: BTreeMap::new(),
-        words: BTreeMap::new(),
-        sequence: 0,
+        listed_once: false,
         drag: None,
         session,
         views: preferences::read_views(&view_key),
@@ -1079,10 +1072,11 @@ mod tests {
         for id in ["a", "d", "c"] {
             view.focus(&doc, id);
         }
-        assert_eq!(remembered_pane(&view, &doc, "s1"), Some("d"));
-        assert_eq!(remembered_pane(&view, &doc, "t2"), Some("d"));
+        assert_eq!(view.remembered(&doc, "s1").as_deref(), Some("d"));
+        assert_eq!(view.remembered(&doc, "t2").as_deref(), Some("d"));
         doc.remove("d").unwrap();
-        assert_eq!(remembered_pane(&view, &doc, "t2"), Some("b"));
+        view.reconcile(&doc);
+        assert_eq!(view.remembered(&doc, "t2").as_deref(), Some("b"));
     }
     #[test]
     fn agent_target_resolves_only_placed_terminal() {

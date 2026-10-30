@@ -358,11 +358,12 @@ impl Workspace {
             return;
         }
         let view = self.view_mut();
-        view.zoomed = if view.zoomed.is_some() {
+        let zoomed = if view.zoomed.is_some() {
             None
         } else {
             view.focused.clone()
         };
+        view.zoom(zoomed.as_deref());
     }
 
     fn toggle_sidebar(&mut self) {
@@ -750,7 +751,7 @@ impl Workspace {
                 .await
             {
                 Ok(_) => {
-                    self.view_mut().zoomed = None;
+                    self.view_mut().zoom(None);
                     self.focus(&picker.pane_id);
                     return;
                 }
@@ -861,7 +862,7 @@ impl Workspace {
                 label: c
                     .branch
                     .clone()
-                    .unwrap_or_else(|| snapshot::folder_label(&c.path)),
+                    .unwrap_or_else(|| snapshot::folder_label(&c.path, "")),
                 branch: c.branch,
                 is_linked_worktree: index > 0,
                 path: c.path,

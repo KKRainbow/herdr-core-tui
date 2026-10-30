@@ -2,6 +2,7 @@
 //! Field names follow Herdr's `ClientShellSnapshot` so the adapted chrome reads naturally.
 use herdr_client_lib::{
     commands::{SPACE_LABEL, qualify},
+    model,
     protocol::Terminal,
     view::{Attention, Identity, View},
 };
@@ -18,25 +19,30 @@ pub enum Status {
     Unknown,
 }
 
+impl From<Option<model::Status>> for Status {
+    fn from(status: Option<model::Status>) -> Self {
+        match status {
+            Some(model::Status::Working) => Self::Working,
+            Some(model::Status::Blocked) => Self::Blocked,
+            Some(model::Status::Done) => Self::Done,
+            Some(model::Status::Idle) => Self::Idle,
+            None => Self::Unknown,
+        }
+    }
+}
+
 impl Status {
-    /// Maps a core OSC 7501 word; an idle or done word the viewer has not seen is Herdr's done.
-    pub fn from_word(word: Option<&str>, unseen: bool) -> Self {
-        match word {
-            Some("working") => Self::Working,
-            Some("blocked" | "error") => Self::Blocked,
-            Some("idle" | "done") if unseen => Self::Done,
-            Some("idle" | "done") => Self::Idle,
-            _ => Self::Unknown,
+    fn shared(self) -> Option<model::Status> {
+        match self {
+            Self::Working => Some(model::Status::Working),
+            Self::Blocked => Some(model::Status::Blocked),
+            Self::Done => Some(model::Status::Done),
+            Self::Idle => Some(model::Status::Idle),
+            Self::Unknown => None,
         }
     }
     pub fn priority(self) -> u8 {
-        match self {
-            Self::Blocked => 4,
-            Self::Done => 3,
-            Self::Working => 2,
-            Self::Idle => 1,
-            Self::Unknown => 0,
-        }
+        model::priority(self.shared())
     }
     pub fn text(self) -> &'static str {
         match self {
@@ -158,42 +164,16 @@ pub struct Sources<'a> {
     pub machine: &'a str,
     pub terminals: &'a BTreeMap<Identity, Terminal>,
     pub attention: &'a Attention,
-    pub sequences: &'a BTreeMap<Identity, u64>,
+    /// The home folder of the shown machine, named `~`; empty when unknown.
+    pub home: &'a str,
     pub git: &'a HashMap<String, GitInfo>,
     /// The address shown without a pane, when the viewer is previewing one.
     pub peek: Option<&'a str>,
 }
 
-/// The status word core reported for a terminal record.
-pub fn word(record: &Terminal) -> Option<&str> {
-    record.word()
-}
-
 /// Where a terminal's foreground program works now, else where it started.
 pub fn cwd(record: &Terminal) -> Option<&str> {
     record.folder()
-}
-
-/// Whether a terminal belongs in the agents list: it runs and reports status through OSC 7501.
-pub fn is_agent(record: &Terminal) -> bool {
-    record.state != "finished" && (record.reported || record.status.is_some())
-}
-
-/// What a terminal's program calls itself: its reported app, name, or program.
-fn program_label(record: &Terminal) -> Option<&str> {
-    record
-        .status
-        .as_ref()
-        .map(|s| s.app.as_str())
-        .filter(|s| !s.is_empty())
-        .or(record.name.as_deref())
-        .or_else(|| {
-            record
-                .argv
-                .first()
-                .map(|p| p.rsplit('/').next().unwrap_or(p))
-        })
-        .filter(|s| !s.is_empty())
 }
 
 fn status_title(record: &Terminal) -> Option<&str> {
@@ -204,21 +184,9 @@ fn status_title(record: &Terminal) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Herdr's automatic label for a folder: its last component.
-pub fn folder_label(path: &str) -> String {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    if trimmed.is_empty() {
-        return if path.is_empty() {
-            "~".into()
-        } else {
-            "/".into()
-        };
-    }
-    trimmed
-        .rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(trimmed)
-        .into()
+/// Herdr's automatic label for a folder: its last component, `~` for home.
+pub fn folder_label(path: &str, home: &str) -> String {
+    model::folder_name(path, home)
 }
 
 /// Every terminal block in a layout subtree, in tree order.
@@ -251,12 +219,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
         records
             .get(address)
             .map(|(identity, record)| {
-                let unseen = sources
-                    .attention
-                    .entries
-                    .iter()
-                    .any(|entry| &entry.identity == *identity && entry.unseen);
-                Status::from_word(word(record), unseen)
+                Status::from(sources.attention.status(identity, record.word()))
             })
             .unwrap_or_default()
     };
@@ -294,9 +257,22 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
             .to_owned();
         let git = sources.git.get(&cwd);
         let custom = name(space);
-        let label = custom
-            .map(str::to_owned)
-            .unwrap_or_else(|| folder_label(git.map_or(cwd.as_str(), |git| git.top.as_str())));
+        let label = model::space_name(
+            space,
+            |local| {
+                let folder = records
+                    .get(qualify(local, sources.machine).as_str())
+                    .and_then(|(_, record)| record.folder())?;
+                Some(
+                    sources
+                        .git
+                        .get(folder)
+                        .map_or(folder, |git| git.top.as_str())
+                        .to_owned(),
+                )
+            },
+            sources.home,
+        );
         let mut space_status = Status::Unknown;
         for (tab_index, tab) in tabs.iter().enumerate() {
             let Some(tab_id) = tab["id"].as_str() else {
@@ -370,22 +346,20 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
     for (identity, record) in sources.terminals {
         let address = record.address.as_str();
         let place = placed.get(address);
-        let unseen = sources
-            .attention
-            .entries
-            .iter()
-            .any(|entry| &entry.identity == identity && entry.unseen);
+        let status = Status::from(sources.attention.status(identity, record.word()));
         if place.is_none() && record.is_live() {
             snapshot.loose.push(Loose {
                 address: address.into(),
-                label: program_label(record).unwrap_or("terminal").to_owned(),
+                label: model::program_label(record)
+                    .unwrap_or("terminal")
+                    .to_owned(),
                 cwd: cwd(record).unwrap_or_default().to_owned(),
-                agent_status: Status::from_word(word(record), unseen),
-                reported: is_agent(record),
+                agent_status: status,
+                reported: model::is_agent(record),
                 focused: sources.peek == Some(address),
             });
         }
-        if !is_agent(record) {
+        if !model::is_agent(record) {
             continue;
         }
         let workspace_label = place
@@ -400,7 +374,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
                 )
             })
             .unwrap_or_else(|| address.to_owned());
-        let agent = program_label(record).map(str::to_owned);
+        let agent = model::program_label(record).map(str::to_owned);
         let pane_id = place
             .map(|(pane, _, _)| pane.clone())
             .unwrap_or_else(|| format!("@{address}"));
@@ -416,8 +390,8 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
             workspace_label,
             agent,
             title: status_title(record).map(str::to_owned),
-            agent_status: Status::from_word(word(record), unseen),
-            state_change_seq: sources.sequences.get(identity).copied().unwrap_or(0),
+            agent_status: status,
+            state_change_seq: sources.attention.seq(identity),
             focused,
         });
     }
@@ -461,10 +435,10 @@ mod tests {
     fn projects_herdr_labels_status_and_unplaced_agents() {
         let doc = json!({"spaces":[
             {"id":"s1","name":"","folder":"/work/app","tabs":[
-                {"id":"t1","name":"","root":{"type":"row","children":[
+                {"id":"t1","name":"","root":{"id":"t1","type":"row","children":[
                     {"type":"block","id":"p1","content":{"terminal":"t1"}},
                     {"type":"block","id":"p2","name":"reviewer","content":{"terminal":"t2"}}]}},
-                {"id":"t2","name":"logs","root":{"type":"block","id":"p3","content":{"terminal":"t3"}}}]},
+                {"id":"t2","name":"logs","root":{"id":"t2","type":"row","children":[{"type":"block","id":"p3","content":{"terminal":"t3"}}]}}]},
             {"id":"s2","name":"Docs","folder":"/","tabs":[]}]});
         let terminals = BTreeMap::from([
             (
@@ -489,15 +463,12 @@ mod tests {
             ),
         ]);
         let mut attention = Attention::default();
-        attention.observe(identity("t2"), Some("working".into()), false);
-        attention.observe(identity("t2"), Some("idle".into()), false);
-        let view = View {
-            active_space: Some("s1".into()),
-            active_tab: Some("t1".into()),
-            focused: Some("p1".into()),
-            zoomed: Some("p1".into()),
-            history: vec![],
-        };
+        attention.set_word(&identity("t2"), Some("working".into()), None, false);
+        attention.set_word(&identity("t2"), Some("idle".into()), None, false);
+        let mut view = View::default();
+        let document = herdr_client_lib::document::Document::decode(doc.clone()).unwrap();
+        view.focus(&document, "p1");
+        view.zoom(Some("p1"));
         let git = HashMap::from([(
             "/work/app/src".to_owned(),
             GitInfo {
@@ -513,7 +484,7 @@ mod tests {
             machine: "",
             terminals: &terminals,
             attention: &attention,
-            sequences: &BTreeMap::new(),
+            home: "",
             git: &git,
             peek: None,
         });
@@ -557,8 +528,9 @@ mod tests {
 
     #[test]
     fn folder_labels_use_the_last_component() {
-        assert_eq!(folder_label("/home/me/project/"), "project");
-        assert_eq!(folder_label("/"), "/");
-        assert_eq!(folder_label(""), "~");
+        assert_eq!(folder_label("/home/me/project/", "/home/me"), "project");
+        assert_eq!(folder_label("/home/me", "/home/me"), "~");
+        assert_eq!(folder_label("/", ""), "/");
+        assert_eq!(folder_label("", ""), "~");
     }
 }

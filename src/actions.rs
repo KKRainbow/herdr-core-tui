@@ -67,7 +67,7 @@ fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
 use herdr_client_lib::commands::launch_source;
 fn focus_created(view: &mut View, document: &herdr_client_lib::document::Document, pane: &str) {
     if view.focus(document, pane) {
-        view.zoomed = None;
+        view.zoom(None);
     }
 }
 pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";

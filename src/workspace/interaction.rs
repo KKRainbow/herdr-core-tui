@@ -630,6 +630,10 @@ impl Workspace {
             format!("{count} panes")
         };
         if members.len() > 1 {
+            let args = json!({"ids":members});
+            let Some(review) = self.run("space.close.group", args.clone()).await else {
+                return;
+            };
             let detail = format!(
                 "{} — {} workspaces, {panes}",
                 workspace.label,
@@ -639,7 +643,7 @@ impl Workspace {
                 title: "Close worktree group?".into(),
                 detail,
                 command: "space.close.group".into(),
-                args: json!({"ids":members}),
+                args: json!({"ids":members,"confirm":true,"expected":review}),
             }));
         } else {
             self.confirm(
@@ -704,19 +708,7 @@ impl Workspace {
     }
 
     async fn accept_confirm(&mut self, confirm: Confirm) {
-        if confirm.command == "space.close.group" {
-            for id in confirm.args["ids"].as_array().into_iter().flatten() {
-                if self
-                    .run("space.close", json!({"id":id,"confirm":true}))
-                    .await
-                    .is_none()
-                {
-                    break;
-                }
-            }
-        } else {
-            self.run(&confirm.command, confirm.args).await;
-        }
+        self.run(&confirm.command, confirm.args).await;
         self.invalidate_git();
     }
 

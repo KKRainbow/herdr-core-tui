@@ -1,6 +1,6 @@
 use crate::Result;
 use herdr_client_lib::{
-    commands::{Launch, Placement},
+    commands::{CloseAssessment, Launch, Placement},
     document::Axis,
     sync::{Session, WriteOutcome},
     view::View,
@@ -103,6 +103,41 @@ fn move_spaces(
     Ok(())
 }
 
+fn close_review(assessment: &CloseAssessment) -> Value {
+    json!({"confirmation":"Closing ends these terminals and their dependent children","target":assessment.target,"version":assessment.version,"terminals":assessment.terminals.iter().map(|t|json!({"address":t["address"],"pid":t["pid"],"parent":t["parent"],"labels":t["labels"],"state":t["state"]})).collect::<Vec<_>>(),"protected":assessment.protected})
+}
+
+async fn close_group(session: &mut Session, machine: &str, args: &Value) -> Result<Value> {
+    let ids: Vec<String> = serde_json::from_value(args["ids"].clone())?;
+    if ids.is_empty() {
+        return Err("Select workspaces to close".into());
+    }
+    let mut assessments = Vec::new();
+    for id in ids {
+        assessments.push(session.assess_close(machine, &id).await?);
+    }
+    let review = json!({"machine":machine,"targets":assessments.iter().map(close_review).collect::<Vec<_>>()});
+    if args["confirm"] != true {
+        return Ok(review);
+    }
+    if args.get("expected") != Some(&review)
+        || assessments
+            .iter()
+            .any(|a| !a.protected.is_empty() || a.version != assessments[0].version)
+    {
+        return Err("The close target changed. Review it again.".into());
+    }
+    let mut version = assessments[0].version;
+    for mut assessment in assessments {
+        // Carry only our successful layout writes forward; keep the reviewed terminal facts.
+        assessment.version = version;
+        let result = session.close(assessment).await?;
+        written(result.layout)?;
+        version = session.documents[machine].version;
+    }
+    Ok(json!({"ok":true}))
+}
+
 pub async fn execute(
     session: &mut Session,
     machine: &str,
@@ -112,6 +147,9 @@ pub async fn execute(
 ) -> Result<Value> {
     if command == "help" {
         return Ok(json!({"help":HELP}));
+    }
+    if command == "space.close.group" {
+        return close_group(session, machine, &args).await;
     }
     let kind = command.split('.').next().unwrap_or("");
     if matches!(command, "space.rename" | "tab.rename" | "pane.rename") {
@@ -136,7 +174,7 @@ pub async fn execute(
     if matches!(command, "space.close" | "tab.close" | "pane.close") {
         let id = target(&args, view, kind)?;
         let assessment = session.assess_close(machine, &id).await?;
-        let review = json!({"confirmation":"Closing ends these terminals and their dependent children", "target":id,"version":assessment.version,"terminals":assessment.terminals.iter().map(|t|json!({"address":t["address"],"pid":t["pid"],"parent":t["parent"],"labels":t["labels"]})).collect::<Vec<_>>(),"protected":assessment.protected});
+        let review = close_review(&assessment);
         if args["confirm"] != true {
             return Ok(review);
         }

@@ -218,10 +218,10 @@ async fn run() -> Result<()> {
                         if bytes.is_empty() {
                             Ok(())
                         } else {
-                            stream.input(bytes).await
+                            stream.try_input(bytes)
                         }
                     }
-                    Event::Paste(text) => stream.input(vt.paste_bytes(&text)).await,
+                    Event::Paste(text) => stream.try_input(vt.paste_bytes(&text)),
                     Event::Resize(_, _) if focused => stream.resize(size.0, size.1).await,
                     Event::FocusGained => {
                         stream.resize(size.0, size.1).await?;
@@ -234,7 +234,7 @@ async fn run() -> Result<()> {
                         if bytes.is_empty() {
                             Ok(())
                         } else {
-                            stream.input(bytes).await
+                            stream.try_input(bytes)
                         }
                     }
                     _ => Ok(()),

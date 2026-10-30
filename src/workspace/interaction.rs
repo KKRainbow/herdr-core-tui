@@ -129,7 +129,7 @@ impl Workspace {
                 {
                     let bytes = input::key(&mut surface.vt, key);
                     if !bytes.is_empty() {
-                        stream.input(bytes).await?;
+                        stream.try_input(bytes)?;
                     }
                 }
                 return Ok(false);
@@ -219,7 +219,7 @@ impl Workspace {
                 if !bytes.is_empty()
                     && let Some(stream) = &surface.stream
                 {
-                    stream.input(bytes).await?;
+                    stream.try_input(bytes)?;
                 }
             }
             return Ok(false);
@@ -230,7 +230,7 @@ impl Workspace {
                     && let Some(surface) = self.surfaces.get(&id)
                     && let Some(stream) = &surface.stream
                 {
-                    stream.input(surface.vt.paste_bytes(&text)).await?;
+                    stream.try_input(surface.vt.paste_bytes(&text))?;
                 }
             }
             Event::FocusLost => {
@@ -380,7 +380,7 @@ impl Workspace {
                             if !bytes.is_empty()
                                 && let Some(stream) = &surface.stream
                             {
-                                stream.input(bytes).await?;
+                                stream.try_input(bytes)?;
                             }
                         }
                     }

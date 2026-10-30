@@ -63,6 +63,22 @@ fn change_value(result: herdr_client_lib::commands::ChangeOutcome) -> Value {
 fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
     json!({"code":output.code,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)})
 }
+fn launch_source(
+    document: &herdr_client_lib::document::Document,
+    placement: &Placement,
+) -> (Option<String>, Option<String>) {
+    match placement {
+        Placement::Split { space, target, .. } => (
+            Some(space.clone()),
+            document
+                .node(target)
+                .and_then(|n| n["content"]["terminal"].as_str())
+                .map(str::to_owned),
+        ),
+        Placement::Tab { space, .. } => (Some(space.clone()), None),
+        Placement::Space { .. } => (None, None),
+    }
+}
 fn focus_created(view: &mut View, document: &herdr_client_lib::document::Document, pane: &str) {
     if view.focus(document, pane) {
         view.zoomed = None;
@@ -138,13 +154,6 @@ pub async fn execute(
         return Ok(change_value(session.park(machine, &id).await?));
     }
     let document = session.document(machine)?;
-    let folder = text(&args, "folder").map(str::to_owned).or_else(|| {
-        view.active_space
-            .as_deref()
-            .and_then(|s| document.node(s))
-            .and_then(|s| s["folder"].as_str())
-            .map(str::to_owned)
-    });
     let pane = id("p");
     let placement = match command {
         "space.new" | "worktree.new" | "worktree.open" => Some(Placement::Space {
@@ -287,6 +296,32 @@ pub async fn execute(
         }
     }
     if let Some(placement) = placement {
+        let (space, terminal) = launch_source(&document, &placement);
+        let mut folder = text(&args, "folder").map(str::to_owned);
+        if folder.is_none() {
+            if let Some(terminal) = terminal {
+                let record = session
+                    .client
+                    .call(
+                        "terminal.get",
+                        json!({"terminal":herdr_client_lib::commands::qualify(&terminal, machine)}),
+                        session.deadline,
+                    )
+                    .await?;
+                folder = record["foreground"]["cwd"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| record["cwd"].as_str().filter(|s| !s.is_empty()))
+                    .map(str::to_owned);
+            }
+            folder = folder.or_else(|| {
+                space
+                    .and_then(|id| document.node(&id))
+                    .and_then(|s| s["folder"].as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            });
+        }
         let argv = match args.get("argv") {
             None => vec![],
             Some(value) => serde_json::from_value::<Vec<String>>(value.clone())?,
@@ -320,6 +355,33 @@ pub async fn execute(
 mod tests {
     use super::*;
     use herdr_client_lib::transport::HcConfig;
+    #[test]
+    fn launch_source_uses_explicit_placement() {
+        use herdr_client_lib::document::{Document, terminal_pane};
+        let mut doc = Document::default();
+        doc.create_space("s", "", "/repo").unwrap();
+        doc.create_tab("s", "t", "", terminal_pane("a", "term"))
+            .unwrap();
+        let split = Placement::Split {
+            space: "s".into(),
+            tab: "t".into(),
+            target: "a".into(),
+            container: "c".into(),
+            pane: "b".into(),
+            axis: Axis::Row,
+        };
+        assert_eq!(
+            launch_source(&doc, &split),
+            (Some("s".into()), Some("term".into()))
+        );
+        let tab = Placement::Tab {
+            space: "s".into(),
+            id: "t2".into(),
+            name: "".into(),
+            pane: "b".into(),
+        };
+        assert_eq!(launch_source(&doc, &tab), (Some("s".into()), None));
+    }
     #[test]
     fn creation_focus_leaves_zoom() {
         use herdr_client_lib::document::{Document, terminal_pane};

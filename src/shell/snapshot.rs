@@ -1,7 +1,8 @@
 //! A Herdr-shaped projection of shared layout, private view, and core terminal facts.
 //! Field names follow Herdr's `ClientShellSnapshot` so the adapted chrome reads naturally.
 use herdr_client_lib::{
-    commands::qualify,
+    commands::{SPACE_LABEL, qualify},
+    protocol::Terminal,
     view::{Attention, Identity, View},
 };
 use serde_json::Value;
@@ -155,7 +156,7 @@ pub struct Sources<'a> {
     pub document: Option<&'a Value>,
     pub view: &'a View,
     pub machine: &'a str,
-    pub terminals: &'a BTreeMap<Identity, Value>,
+    pub terminals: &'a BTreeMap<Identity, Terminal>,
     pub attention: &'a Attention,
     pub sequences: &'a BTreeMap<Identity, u64>,
     pub git: &'a HashMap<String, GitInfo>,
@@ -164,23 +165,43 @@ pub struct Sources<'a> {
 }
 
 /// The status word core reported for a terminal record.
-pub fn word(record: &Value) -> Option<&str> {
-    record["status"]["state"]
-        .as_str()
-        .or_else(|| record["status"].as_str())
+pub fn word(record: &Terminal) -> Option<&str> {
+    record.word()
 }
 
 /// Where a terminal's foreground program works now, else where it started.
-pub fn cwd(record: &Value) -> Option<&str> {
-    record["foreground"]["cwd"]
-        .as_str()
-        .or_else(|| record["cwd"].as_str())
-        .filter(|cwd| !cwd.is_empty())
+pub fn cwd(record: &Terminal) -> Option<&str> {
+    record.folder()
 }
 
 /// Whether a terminal belongs in the agents list: it runs and reports status through OSC 7501.
-pub fn is_agent(record: &Value) -> bool {
-    record["state"] != "finished" && (record["reported"] == true || !record["status"].is_null())
+pub fn is_agent(record: &Terminal) -> bool {
+    record.state != "finished" && (record.reported || record.status.is_some())
+}
+
+/// What a terminal's program calls itself: its reported app, name, or program.
+fn program_label(record: &Terminal) -> Option<&str> {
+    record
+        .status
+        .as_ref()
+        .map(|s| s.app.as_str())
+        .filter(|s| !s.is_empty())
+        .or(record.name.as_deref())
+        .or_else(|| {
+            record
+                .argv
+                .first()
+                .map(|p| p.rsplit('/').next().unwrap_or(p))
+        })
+        .filter(|s| !s.is_empty())
+}
+
+fn status_title(record: &Terminal) -> Option<&str> {
+    record
+        .status
+        .as_ref()
+        .map(|s| s.title.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 /// Herdr's automatic label for a folder: its last component.
@@ -221,10 +242,10 @@ fn name(node: &Value) -> Option<&str> {
 }
 
 pub fn build(sources: &Sources<'_>) -> Snapshot {
-    let records: HashMap<&str, (&Identity, &Value)> = sources
+    let records: HashMap<&str, (&Identity, &Terminal)> = sources
         .terminals
         .iter()
-        .filter_map(|(identity, record)| Some((record["address"].as_str()?, (identity, record))))
+        .map(|(identity, record)| (record.address.as_str(), (identity, record)))
         .collect();
     let status_of = |address: &str| {
         records
@@ -302,8 +323,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
                 let title = terminal
                     .as_deref()
                     .and_then(|address| records.get(address))
-                    .and_then(|(_, record)| record["status"]["title"].as_str())
-                    .filter(|s| !s.is_empty());
+                    .and_then(|(_, record)| status_title(record));
                 snapshot.panes.push(Pane {
                     pane_id: pane_id.into(),
                     workspace_id: space_id.into(),
@@ -348,29 +368,17 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
         });
     }
     for (identity, record) in sources.terminals {
-        let Some(address) = record["address"].as_str() else {
-            continue;
-        };
+        let address = record.address.as_str();
         let place = placed.get(address);
         let unseen = sources
             .attention
             .entries
             .iter()
             .any(|entry| &entry.identity == identity && entry.unseen);
-        if place.is_none() && record["state"] == "live" {
+        if place.is_none() && record.is_live() {
             snapshot.loose.push(Loose {
                 address: address.into(),
-                label: record["status"]["app"]
-                    .as_str()
-                    .or_else(|| record["name"].as_str())
-                    .or_else(|| {
-                        record["argv"][0]
-                            .as_str()
-                            .map(|p| p.rsplit('/').next().unwrap_or(p))
-                    })
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("terminal")
-                    .to_owned(),
+                label: program_label(record).unwrap_or("terminal").to_owned(),
                 cwd: cwd(record).unwrap_or_default().to_owned(),
                 agent_status: Status::from_word(word(record), unseen),
                 reported: is_agent(record),
@@ -384,7 +392,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
             .and_then(|(_, space, _)| snapshot.workspace(space))
             .map(|w| w.label.clone())
             .or_else(|| {
-                let space = record["labels"]["herdr.space"].as_str()?;
+                let space = record.label(SPACE_LABEL)?;
                 Some(
                     snapshot
                         .workspace(space)
@@ -392,16 +400,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
                 )
             })
             .unwrap_or_else(|| address.to_owned());
-        let agent = record["status"]["app"]
-            .as_str()
-            .or_else(|| record["name"].as_str())
-            .or_else(|| {
-                record["argv"][0]
-                    .as_str()
-                    .map(|p| p.rsplit('/').next().unwrap_or(p))
-            })
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
+        let agent = program_label(record).map(str::to_owned);
         let pane_id = place
             .map(|(pane, _, _)| pane.clone())
             .unwrap_or_else(|| format!("@{address}"));
@@ -416,10 +415,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
             tab_id: place.map(|(_, _, tab)| tab.clone()),
             workspace_label,
             agent,
-            title: record["status"]["title"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
+            title: status_title(record).map(str::to_owned),
             agent_status: Status::from_word(word(record), unseen),
             state_change_seq: sources.sequences.get(identity).copied().unwrap_or(0),
             focused,
@@ -473,23 +469,23 @@ mod tests {
         let terminals = BTreeMap::from([
             (
                 identity("t1"),
-                json!({"address":"t1","cwd":"/work/app/src","status":{"state":"working","app":"claude"},"reported":true}),
+                serde_json::from_value::<Terminal>(json!({"address":"t1","cwd":"/work/app/src","status":{"state":"working","app":"claude"},"reported":true})).unwrap(),
             ),
             (
                 identity("t2"),
-                json!({"address":"t2","status":{"state":"idle"},"reported":true}),
+                serde_json::from_value::<Terminal>(json!({"address":"t2","status":{"state":"idle"},"reported":true})).unwrap(),
             ),
             (
                 identity("t3"),
-                json!({"address":"t3","status":null,"reported":false}),
+                serde_json::from_value::<Terminal>(json!({"address":"t3","status":null,"reported":false})).unwrap(),
             ),
             (
                 identity("t8"),
-                json!({"address":"t8","state":"finished","status":null,"reported":true,"labels":{"herdr.space":"s1"}}),
+                serde_json::from_value::<Terminal>(json!({"address":"t8","state":"finished","status":null,"reported":true,"labels":{"herdr.space":"s1"}})).unwrap(),
             ),
             (
                 identity("t9"),
-                json!({"address":"t9","state":"live","status":{"state":"blocked"},"reported":true,"labels":{"herdr.space":"s2"}}),
+                serde_json::from_value::<Terminal>(json!({"address":"t9","state":"live","status":{"state":"blocked"},"reported":true,"labels":{"herdr.space":"s2"}})).unwrap(),
             ),
         ]);
         let mut attention = Attention::default();

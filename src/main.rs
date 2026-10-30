@@ -165,7 +165,7 @@ async fn run() -> Result<()> {
             }
             Next::Output(Ok(Some(StreamEvent::Closed(_)) | None)) => {
                 current.stream = None;
-                if current.record["keep"] != true {
+                if !current.record.keep {
                     break;
                 }
             }
@@ -183,7 +183,7 @@ async fn run() -> Result<()> {
                 Err(_) => connection = None,
             },
             Next::Retry => {
-                if current.record["state"] == "finished" {
+                if current.record.state == "finished" {
                     break;
                 }
                 if current.attach(size).await.is_ok() {

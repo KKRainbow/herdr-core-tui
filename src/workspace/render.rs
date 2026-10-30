@@ -196,7 +196,7 @@ impl Workspace {
             let cwd = |address: &str| {
                 terminals
                     .values()
-                    .find(|r| r["address"] == address)
+                    .find(|r| r.address == address)
                     .and_then(snapshot::cwd)
                     .map(str::to_owned)
             };

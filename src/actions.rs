@@ -104,7 +104,7 @@ fn move_spaces(
 }
 
 fn close_review(assessment: &CloseAssessment) -> Value {
-    json!({"confirmation":"Closing ends these terminals and their dependent children","target":assessment.target,"version":assessment.version,"terminals":assessment.terminals.iter().map(|t|json!({"address":t["address"],"pid":t["pid"],"parent":t["parent"],"labels":t["labels"],"state":t["state"]})).collect::<Vec<_>>(),"protected":assessment.protected})
+    json!({"confirmation":"Closing ends these terminals and their dependent children","target":assessment.target,"version":assessment.version,"terminals":assessment.terminals.iter().map(|t|json!({"address":t.address,"pid":t.pid,"parent":t.parent,"labels":t.labels,"state":t.state})).collect::<Vec<_>>(),"protected":assessment.protected})
 }
 
 async fn close_group(session: &mut Session, machine: &str, args: &Value) -> Result<Value> {
@@ -334,7 +334,7 @@ pub async fn execute(
                 let close = session
                     .assess_close(machine, &target(&args, view, "space")?)
                     .await?;
-                let review = json!({"confirmation":"Remove this checkout and close its workspace","path":assessment.checkout.path,"version":close.version,"assessment":format!("{assessment:?}"),"terminals":close.terminals.iter().map(|t|json!({"address":t["address"],"pid":t["pid"]})).collect::<Vec<_>>()});
+                let review = json!({"confirmation":"Remove this checkout and close its workspace","path":assessment.checkout.path,"version":close.version,"assessment":format!("{assessment:?}"),"terminals":close.terminals.iter().map(|t|json!({"address":t.address,"pid":t.pid})).collect::<Vec<_>>()});
                 if args["confirm"] != true {
                     return Ok(review);
                 }

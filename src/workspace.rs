@@ -23,6 +23,7 @@ use futures_util::{StreamExt, future::select_all};
 use herdr_client_lib::{
     client::{Error, Stream, StreamEvent},
     commands::qualify,
+    protocol::{MachineList, Notification},
     sync::Session,
     transport::HcConfig,
     view::{Identity, View},
@@ -150,11 +151,7 @@ impl Workspace {
         });
     }
     async fn refresh_identities(&mut self) -> Result<bool> {
-        let machines = self
-            .session
-            .client
-            .call("machine.list", json!({}), TIME)
-            .await?;
+        let machines = self.session.client.machine_list(TIME).await?;
         let identities = identities(&self.session.client, &machines);
         let mut changed = self.identities != identities;
         self.identities = identities;
@@ -211,10 +208,7 @@ impl Workspace {
             let word = snapshot::word(record).map(str::to_owned);
             // Only changes seen while running sound; an agent already waiting at startup does not.
             if let Some(previous) = self.words.get(identity) {
-                let watched = self.focused
-                    && record["address"]
-                        .as_str()
-                        .is_some_and(|address| visible.contains(address));
+                let watched = self.focused && visible.contains(&record.address);
                 sounds.extend(crate::sound::for_change(
                     previous.as_deref(),
                     word.as_deref(),
@@ -229,7 +223,7 @@ impl Workspace {
             self.attention.observe(
                 identity.clone(),
                 word,
-                record["address"].as_str() == active.as_deref(),
+                Some(record.address.as_str()) == active.as_deref(),
             );
         }
         if self.preferences.sound.enabled {
@@ -437,26 +431,18 @@ impl Workspace {
                     continue;
                 }
                 surface.retry_at = Instant::now() + Duration::from_secs(2);
-                let finished =
-                    self.session.terminals.values().any(|record| {
-                        record["address"] == address && record["state"] == "finished"
-                    });
+                let finished = self
+                    .session
+                    .terminals
+                    .values()
+                    .any(|record| record.address == address && record.state == "finished");
                 if finished {
-                    match self
-                        .session
-                        .client
-                        .call("terminal.read", json!({"terminal":address}), TIME)
-                        .await
-                    {
+                    match self.session.client.terminal_read(&address, 0, TIME).await {
                         Ok(result) => {
                             surface.vt = Vt::new(wanted.0, wanted.1);
-                            surface.vt.write(
-                                result["text"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .replace('\n', "\r\n")
-                                    .as_bytes(),
-                            );
+                            surface
+                                .vt
+                                .write(result.text.replace('\n', "\r\n").as_bytes());
                             surface.ended = true;
                             surface.error = None;
                         }
@@ -464,15 +450,26 @@ impl Workspace {
                     }
                     continue;
                 }
-                match self.session.client.attach(json!({"terminal":address,"cols":wanted.0,"rows":wanted.1,"resumed":true,"history":1000}),TIME).await {
-                    Ok((result, stream)) => {
-                        let size = size(&result["terminal"],wanted);
-                        surface.vt = Vt::new(size.0,size.1);
+                match self
+                    .session
+                    .client
+                    .attach(
+                        &crate::connection::attach_params(&address, wanted, true),
+                        TIME,
+                    )
+                    .await
+                {
+                    Ok((record, stream)) => {
+                        let size = crate::connection::size(&record, wanted);
+                        surface.vt = Vt::new(size.0, size.1);
                         surface.stream = Some(stream);
                         surface.error = None;
                         surface.wanted = wanted;
                     }
-                    Err(error) => {surface.error = Some(error.to_string());continue;}
+                    Err(error) => {
+                        surface.error = Some(error.to_string());
+                        continue;
+                    }
                 }
             }
             if surface.wanted != wanted || activate {
@@ -522,7 +519,7 @@ impl Workspace {
                 .session
                 .terminals
                 .values()
-                .any(|r| r["address"] == address)
+                .any(|r| r.address == address)
             {
                 return Err("Terminal unavailable".into());
             }
@@ -558,15 +555,27 @@ impl Workspace {
         }
         Ok(result)
     }
-    fn notification(&mut self, value: &Value) {
-        let event = &value["params"];
-        let address = event["terminal"].as_str();
+    fn notification(&mut self, notification: &Notification) {
+        let event = match notification {
+            Notification::Event(event) => Some(event),
+            _ => None,
+        };
+        let address = event.and_then(|e| e.terminal.as_deref());
         for surface in self.surfaces.values_mut() {
             if address == Some(&surface.address) {
-                match event["type"].as_str() {
+                match event.map(|e| e.kind.as_str()) {
                     Some("size") => {
-                        let size = size(&event["data"], surface.wanted);
-                        surface.vt.resize(size.0, size.1);
+                        let data = &event.unwrap().data;
+                        let fallback = surface.wanted;
+                        let dimension = |key: &str, fallback: u16| {
+                            data[key]
+                                .as_u64()
+                                .map(|n| n.clamp(1, 65535) as u16)
+                                .unwrap_or(fallback)
+                        };
+                        surface
+                            .vt
+                            .resize(dimension("cols", fallback.0), dimension("rows", fallback.1));
                     }
                     Some("restarted" | "lost") => {
                         surface.stream = None;
@@ -575,11 +584,11 @@ impl Workspace {
                     Some("finished") => surface.ended = true,
                     _ => {}
                 }
-            } else if value["method"] == "missed" {
+            } else if matches!(notification, Notification::Missed(_)) {
                 surface.stream = None;
             }
         }
-        if matches!(event["type"].as_str(), Some("turn")) {
+        if event.is_some_and(|e| e.kind == "turn") {
             self.invalidate_git();
         }
         self.reconcile();
@@ -706,41 +715,21 @@ fn agent_pane(node: &Value, address: &str, machine: &str) -> Option<String> {
 
 fn identities(
     client: &herdr_client_lib::client::Client,
-    machines: &Value,
+    machines: &MachineList,
 ) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    if let Some(id) = client.capabilities()["core"]["id"].as_str() {
-        result.insert(String::new(), id.into());
+    if !client.core_id().is_empty() {
+        result.insert(String::new(), client.core_id().into());
     }
-    for record in machines["machines"].as_array().into_iter().flatten() {
-        if let (Some(name), Some(id)) = (record["name"].as_str(), record["id"].as_str()) {
-            result.insert(name.into(), id.into());
-        }
+    for record in &machines.machines {
+        result.insert(record.name.clone(), record.id.clone());
     }
     result
 }
-fn machine_names(machines: &Value) -> Vec<String> {
+fn machine_names(machines: &MachineList) -> Vec<String> {
     let mut names = vec![String::new()];
-    names.extend(
-        machines["machines"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m["name"].as_str().map(str::to_owned)),
-    );
+    names.extend(machines.machines.iter().map(|m| m.name.clone()));
     names
-}
-fn size(record: &Value, fallback: (u16, u16)) -> (u16, u16) {
-    (
-        record["cols"]
-            .as_u64()
-            .map(|n| n.clamp(1, 65535) as u16)
-            .unwrap_or(fallback.0),
-        record["rows"]
-            .as_u64()
-            .map(|n| n.clamp(1, 65535) as u16)
-            .unwrap_or(fallback.1),
-    )
 }
 async fn next_output(
     surfaces: &mut BTreeMap<String, Surface>,
@@ -768,7 +757,7 @@ pub async fn run(
     let mut endpoint = crate::control::Endpoint::bind(&config.session, &instance)?;
     let view_key = format!("{}:{instance}", config.session);
     let client = config.connect(TIME).await?;
-    let machine_list = client.call("machine.list", json!({}), TIME).await?;
+    let machine_list = client.machine_list(TIME).await?;
     let machines = machine_names(&machine_list);
     let identities = identities(&client, &machine_list);
     let session = Session::connect(client, machines.clone(), TIME).await?;
@@ -875,7 +864,7 @@ pub async fn run(
         enum Next {
             Host(Option<io::Result<Event>>),
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
-            Update(std::result::Result<Value, Error>),
+            Update(std::result::Result<Notification, Error>),
             Retry,
             Paint,
             Control(crate::control::Request),
@@ -993,14 +982,14 @@ pub async fn run(
                 }
                 dirty = true;
             }
-            Next::Update(Ok(value)) => {
-                if value["method"] == "missed"
+            Next::Update(Ok(notification)) => {
+                if matches!(notification, Notification::Missed(_))
                     && let Err(e) = app.refresh_identities().await
                 {
                     app.toast(e.to_string(), true);
                 }
-                if value["method"] != "heartbeat" {
-                    app.notification(&value);
+                if !matches!(notification, Notification::Heartbeat { .. }) {
+                    app.notification(&notification);
                     dirty = true;
                 }
             }

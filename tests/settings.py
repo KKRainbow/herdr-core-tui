@@ -9,14 +9,15 @@ import struct
 import subprocess
 import termios
 import time
+import tomllib
 
 from fixture import Core
 
 binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
 core = Core("settings")
-config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.json"
+config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.toml"
 config.parent.mkdir(parents=True)
-config.write_text(json.dumps({"keys": {"next_agent": "alt+a"}}))
+config.write_text('# my keys\n[keys]\nnext_agent = "alt+a"\n')
 process = master = slave = None
 try:
     subprocess.check_output([str(binary), "do", "space.new", json.dumps({"argv": ["sh", "-c", "sleep 180"]})], env=core.env, timeout=20)
@@ -41,7 +42,7 @@ try:
         return output
 
     def saved():
-        return json.loads(config.read_text())
+        return tomllib.loads(config.read_text())
 
     wait_for(b"agents")
     os.write(master, b"\x02s")
@@ -57,20 +58,21 @@ try:
     wait_for(b"settings")
     os.write(master, b"\t\x1b[B\r")
     end = time.monotonic() + 5
-    while saved().get("status_indicators") != "symbols" and time.monotonic() < end:
+    while saved().get("ui", {}).get("status_indicators") != "symbols" and time.monotonic() < end:
         read_for()
-    assert saved()["status_indicators"] == "symbols", saved()
+    assert saved()["ui"]["status_indicators"] == "symbols", saved()
     os.write(master, b"\t\x1b[B\r")
     end = time.monotonic() + 5
-    while saved().get("sound", {}).get("enabled") is not False and time.monotonic() < end:
+    while saved().get("ui", {}).get("sound", {}).get("enabled") is not False and time.monotonic() < end:
         read_for()
-    assert saved()["sound"]["enabled"] is False, saved()
+    assert saved()["ui"]["sound"]["enabled"] is False, saved()
     # Back to themes: the third entry applies and closes settings.
     os.write(master, b"\t\x1b[B\x1b[B\x1b[B\r")
     end = time.monotonic() + 5
-    while saved().get("theme") != "tokyo-night" and time.monotonic() < end:
+    while saved().get("theme", {}).get("name") != "tokyo-night" and time.monotonic() < end:
         read_for()
-    assert saved()["theme"] == "tokyo-night" and saved()["keys"] == {"next_agent": "alt+a"}, saved()
+    assert saved()["theme"]["name"] == "tokyo-night" and saved()["keys"] == {"next_agent": "alt+a"}, saved()
+    assert config.read_text().startswith("# my keys"), config.read_text()
     os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
     print("PASS: settings preview without saving, indicators and sound in place, theme applies and closes, other config kept")

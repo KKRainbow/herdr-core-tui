@@ -256,19 +256,30 @@ impl Default for Keymap {
 
 impl Keymap {
     pub fn new(overrides: &BTreeMap<String, String>) -> Self {
-        Self::with_commands(overrides, &[])
+        let overrides = overrides
+            .iter()
+            .map(|(action, binding)| (action.clone(), vec![binding.clone()]))
+            .collect();
+        Self::with_commands(&overrides, &[])
     }
 
     /// Adds custom command keys after the built-in actions; a key already taken is skipped.
+    /// Each action takes one or more bindings, as Herdr's `BindingConfig`.
     pub fn with_commands(
-        overrides: &BTreeMap<String, String>,
+        overrides: &BTreeMap<String, Vec<String>>,
         commands: &[(String, Option<String>)],
     ) -> Self {
-        let value = |action: &str, default: &str| {
+        let values = |action: &str, default: &str| {
             overrides
                 .get(action)
                 .cloned()
-                .unwrap_or_else(|| default.to_owned())
+                .unwrap_or_else(|| vec![default.to_owned()])
+        };
+        let value = |action: &str, default: &str| {
+            values(action, default)
+                .into_iter()
+                .next()
+                .unwrap_or_default()
         };
         let prefix = parse(&value("prefix", "ctrl+b"))
             .filter(|binding| !binding.prefix)
@@ -277,11 +288,13 @@ impl Keymap {
             });
         let mut bindings: Vec<(String, Binding)> = vec![];
         for (action, default) in DEFAULTS.iter().skip(1) {
-            if let Some(binding) = parse(&value(action, default))
-                && !bindings.iter().any(|(_, existing)| *existing == binding)
-                && !(binding.prefix && binding.combo == prefix)
-            {
-                bindings.push(((*action).to_owned(), binding));
+            for text in values(action, default) {
+                if let Some(binding) = parse(&text)
+                    && !bindings.iter().any(|(_, existing)| *existing == binding)
+                    && !(binding.prefix && binding.combo == prefix)
+                {
+                    bindings.push(((*action).to_owned(), binding));
+                }
             }
         }
         let mut ranges = vec![];

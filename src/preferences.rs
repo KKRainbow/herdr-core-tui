@@ -2,18 +2,22 @@ use crate::Result;
 use herdr_client_lib::view::{Attention, View};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
-#[derive(Serialize, Deserialize)]
-#[serde(default)]
+/// Settings read from Herdr's `config.toml` layout.
 pub struct Preferences {
     pub sidebar_width: u16,
     /// Herdr theme name, such as `catppuccin` or `tokyo-night`.
     pub theme: String,
+    /// Herdr's `[theme.custom]` color tokens over the theme.
+    pub custom_colors: BTreeMap<String, String>,
+    /// Herdr's legacy `ui.accent`; applies when not `cyan` and no custom accent is set.
+    pub accent: String,
     /// `dots` or `symbols`, as Herdr's `ui.status_indicators`.
     pub status_indicators: String,
     /// `spaces` or `priority`, as Herdr's `ui.agent_panel_sort`.
     pub agent_panel_sort: String,
-    /// Herdr `[keys]` names mapped to bindings, such as `"new_tab": "prefix+c"`.
-    pub keys: BTreeMap<String, String>,
+    /// Herdr `[keys]` names mapped to bindings, such as `new_tab = "prefix+c"`;
+    /// `[keys.indexed]` entries appear as `indexed.tabs` and so on.
+    pub keys: BTreeMap<String, Vec<String>>,
     pub sound: Sound,
     pub worktrees: Worktrees,
     /// Herdr's `[[keys.command]]`: keys that run a command.
@@ -56,17 +60,24 @@ pub struct Worktrees {
 #[serde(default)]
 pub struct Sound {
     pub enabled: bool,
+    /// Replaces every built-in sound.
+    pub path: Option<PathBuf>,
     /// Replaces the built-in sound an agent makes when it finishes.
     pub done_path: Option<PathBuf>,
     /// Replaces the built-in sound an agent makes when it asks a question.
     pub request_path: Option<PathBuf>,
+    /// The folder relative paths start from: that of the file they came from.
+    #[serde(skip)]
+    pub folder: Option<PathBuf>,
 }
 impl Default for Sound {
     fn default() -> Self {
         Self {
             enabled: true,
+            path: None,
             done_path: None,
             request_path: None,
+            folder: None,
         }
     }
 }
@@ -76,8 +87,9 @@ impl Sound {
         let path = match sound {
             crate::sound::Sound::Done => self.done_path.as_ref(),
             crate::sound::Sound::Request => self.request_path.as_ref(),
-        }?;
-        Some(match config_path().parent() {
+        }
+        .or(self.path.as_ref())?;
+        Some(match &self.folder {
             Some(folder) if path.is_relative() => folder.join(path),
             _ => path.clone(),
         })
@@ -88,6 +100,8 @@ impl Default for Preferences {
         Self {
             sidebar_width: 26,
             theme: "catppuccin".into(),
+            custom_colors: BTreeMap::new(),
+            accent: "cyan".into(),
             status_indicators: "dots".into(),
             agent_panel_sort: "spaces".into(),
             keys: BTreeMap::new(),
@@ -106,9 +120,18 @@ impl Preferences {
             .collect();
         crate::shell::keys::Keymap::with_commands(&self.keys, &commands)
     }
+    /// The theme with Herdr's custom colors and legacy accent applied.
+    pub fn palette(&self, theme: &str) -> crate::shell::palette::Palette {
+        let mut palette = crate::shell::palette::Palette::from_name(theme).unwrap_or_default();
+        palette.apply_overrides(&self.custom_colors);
+        if self.accent != "cyan" && !self.custom_colors.contains_key("accent") {
+            palette.accent = crate::shell::palette::parse_color(&self.accent);
+        }
+        palette
+    }
     pub fn shell(&self) -> crate::shell::Config {
         crate::shell::Config {
-            palette: crate::shell::palette::Palette::from_name(&self.theme).unwrap_or_default(),
+            palette: self.palette(&self.theme),
             symbols: self.status_indicators.eq_ignore_ascii_case("symbols"),
             sort: if self.agent_panel_sort.eq_ignore_ascii_case("priority") {
                 crate::shell::Sort::Priority
@@ -147,34 +170,132 @@ fn base(variable: &str, fallback: &str) -> PathBuf {
         })
         .join("herder-tui")
 }
+/// This client's `config.toml`, in Herdr's format.
 pub fn config_path() -> PathBuf {
-    base("XDG_CONFIG_HOME", ".config").join("config.json")
+    base("XDG_CONFIG_HOME", ".config").join("config.toml")
 }
-/// Sets one setting in the config file, keeping everything else the person wrote,
-/// as Herdr's settings write a single edit.
-pub fn edit(path: &[&str], value: serde_json::Value) -> Result<()> {
-    let file = config_path();
-    let mut config: serde_json::Value = match std::fs::read(&file) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
-        Err(e) => return Err(e.into()),
-    };
-    let mut node = &mut config;
-    for key in &path[..path.len() - 1] {
-        if !node[*key].is_object() {
-            node[*key] = serde_json::json!({});
-        }
-        node = &mut node[*key];
+/// Herdr's own `config.toml`, read when this client has none yet.
+pub fn herdr_config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("HERDR_CONFIG_PATH") {
+        return path.into();
     }
-    node[path[path.len() - 1]] = value;
-    write_atomic(&file, &serde_json::to_vec_pretty(&config)?)
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into())).join(".config")
+        })
+        .join("herdr")
+        .join("config.toml")
+}
+/// The file settings come from: this client's, else Herdr's, else none.
+pub fn source_path() -> Option<PathBuf> {
+    [config_path(), herdr_config_path()]
+        .into_iter()
+        .find(|path| path.is_file())
+}
+/// The sections of Herdr's `config.toml` this client reads; others are ignored.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct File {
+    theme: ThemeFile,
+    ui: UiFile,
+    keys: KeysFile,
+    worktrees: Worktrees,
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ThemeFile {
+    name: Option<String>,
+    /// Token colors; Herdr's `light`/`dark` tables are skipped.
+    custom: BTreeMap<String, toml::Value>,
+}
+#[derive(Deserialize)]
+#[serde(default)]
+struct UiFile {
+    sidebar_width: u16,
+    accent: String,
+    status_indicators: String,
+    agent_panel_sort: String,
+    sound: Sound,
+}
+impl Default for UiFile {
+    fn default() -> Self {
+        let defaults = Preferences::default();
+        Self {
+            sidebar_width: defaults.sidebar_width,
+            accent: defaults.accent,
+            status_indicators: defaults.status_indicators,
+            agent_panel_sort: defaults.agent_panel_sort,
+            sound: Sound::default(),
+        }
+    }
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct KeysFile {
+    command: Vec<Command>,
+    indexed: BTreeMap<String, String>,
+    /// Each action takes one binding or a list, as Herdr's `BindingConfig`.
+    #[serde(flatten)]
+    actions: BTreeMap<String, toml::Value>,
+}
+impl Preferences {
+    /// Settings from Herdr-format TOML text.
+    pub fn parse(text: &str, folder: Option<PathBuf>) -> Result<Self> {
+        let file: File = toml::from_str(text)?;
+        let mut keys = BTreeMap::new();
+        for (action, value) in file.keys.actions {
+            let bindings = match value {
+                toml::Value::String(binding) => vec![binding],
+                toml::Value::Array(list) => list
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
+                _ => continue,
+            };
+            keys.insert(action, bindings);
+        }
+        for (kind, modifiers) in file.keys.indexed {
+            keys.insert(format!("indexed.{kind}"), vec![modifiers]);
+        }
+        let mut sound = file.ui.sound;
+        sound.folder = folder;
+        Ok(Self {
+            sidebar_width: file.ui.sidebar_width,
+            theme: file.theme.name.unwrap_or_else(|| "catppuccin".into()),
+            custom_colors: file
+                .theme
+                .custom
+                .into_iter()
+                .filter_map(|(token, value)| Some((token, value.as_str()?.to_owned())))
+                .collect(),
+            accent: file.ui.accent,
+            status_indicators: file.ui.status_indicators,
+            agent_panel_sort: file.ui.agent_panel_sort,
+            keys,
+            sound,
+            worktrees: file.worktrees,
+            commands: file.keys.command,
+        })
+    }
+}
+/// Writes one of Herdr's settings edits to this client's `config.toml`. The first
+/// edit starts from Herdr's file when this client has none, so its settings carry over.
+pub fn edit(edit: crate::config_edit::Edit<'_>) -> Result<()> {
+    let seed = herdr_config_path();
+    crate::config_edit::update_file_at(&config_path(), Some(&seed), |content| edit.apply(content))?;
+    Ok(())
 }
 pub fn load() -> Result<Preferences> {
-    match std::fs::read(config_path()) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
-        Err(e) => Err(e.into()),
-    }
+    let Some(path) = source_path() else {
+        return Ok(Preferences::default());
+    };
+    let text = std::fs::read_to_string(&path)?;
+    Preferences::parse(
+        text.trim_start_matches('\u{feff}'),
+        path.parent().map(PathBuf::from),
+    )
+    .map_err(|e| format!("{}: {e}", path.display()).into())
 }
 fn state_path(kind: &str, session: &str) -> PathBuf {
     let name = session
@@ -227,4 +348,68 @@ pub fn read_views(session: &str) -> BTreeMap<String, View> {
 }
 pub fn save_views(session: &str, views: &BTreeMap<String, View>) -> Result<()> {
     write_atomic(&view_path(session), &serde_json::to_vec_pretty(views)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_herdr_config_sections() {
+        let text = r##"
+onboarding = false
+[theme]
+name = "nord"
+[theme.custom]
+accent = "#ff0000"
+[theme.custom.dark]
+accent = "#00ff00"
+[ui]
+sidebar_width = 30
+status_indicators = "symbols"
+[ui.sound]
+enabled = false
+path = "all.mp3"
+[keys]
+prefix = "ctrl+a"
+new_tab = ["prefix+c", "prefix+t"]
+[keys.indexed]
+tabs = "alt"
+[[keys.command]]
+key = "prefix+g"
+command = "lazygit"
+type = "pane"
+[worktrees]
+directory = "~/trees"
+[remote]
+unknown = 1
+"##;
+        let p = Preferences::parse(text, Some("/conf".into())).unwrap();
+        assert_eq!((p.theme.as_str(), p.sidebar_width), ("nord", 30));
+        assert_eq!(p.custom_colors["accent"], "#ff0000");
+        assert_eq!(p.status_indicators, "symbols");
+        assert_eq!(p.keys["new_tab"], ["prefix+c", "prefix+t"]);
+        assert_eq!(p.keys["indexed.tabs"], ["alt"]);
+        assert_eq!(p.commands[0].kind, CommandKind::Pane);
+        assert_eq!(p.worktrees.directory.as_deref(), Some("~/trees"));
+        assert!(!p.sound.enabled);
+        assert_eq!(
+            p.sound.path(crate::sound::Sound::Done),
+            Some(PathBuf::from("/conf/all.mp3"))
+        );
+        let palette = p.palette(&p.theme);
+        assert_eq!(palette.accent, ratatui::style::Color::Rgb(255, 0, 0));
+        let keys = p.keymap();
+        assert_eq!(keys.label("new_tab"), "prefix+c");
+        assert_eq!(keys.prefix_label(), "ctrl+a");
+    }
+
+    #[test]
+    fn legacy_accent_applies_without_a_custom_accent() {
+        let p = Preferences::parse("[ui]\naccent = \"#010203\"\n", None).unwrap();
+        assert_eq!(
+            p.palette("catppuccin").accent,
+            ratatui::style::Color::Rgb(1, 2, 3)
+        );
+    }
 }

@@ -22,15 +22,25 @@ core.env["EDITOR"] = str(editor)
 config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui"
 config.mkdir(parents=True)
 shell_result = core.root / "shell-command.txt"
-(config / "config.json").write_text(json.dumps({"keys": {
-    "indexed.workspaces": "alt",
-    "focus_agent": "prefix+alt+1..9",
-    "resize_pane_right": "prefix+ctrl+l",
-    "clear_pane": "prefix+y",
-}, "commands": [
-    {"key": "prefix+u", "command": f"printf '%s %s' \"$HERDR_ACTIVE_PANE_ID\" \"$HC_SESSION\" > {shell_result}"},
-    {"key": "prefix+i", "command": "echo pane-command; sleep 60", "type": "pane", "description": "pane command"},
-]}))
+(config / "config.toml").write_text(f"""
+[keys]
+resize_pane_right = "prefix+ctrl+l"
+clear_pane = "prefix+y"
+focus_agent = "prefix+alt+1..9"
+
+[keys.indexed]
+workspaces = "alt"
+
+[[keys.command]]
+key = "prefix+u"
+command = {json.dumps(f"printf '%s %s' \"$HERDR_ACTIVE_PANE_ID\" \"$HC_SESSION\" > {shell_result}")}
+
+[[keys.command]]
+key = "prefix+i"
+command = "echo pane-command; sleep 60"
+type = "pane"
+description = "pane command"
+""")
 block = "printf '\\033]7501;state=working\\033\\\\'; sleep 3; printf '\\033]7501;state=blocked\\033\\\\'; sleep 180"
 process = master = slave = None
 try:

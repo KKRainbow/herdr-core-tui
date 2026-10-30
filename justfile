@@ -24,6 +24,7 @@ integration: build
     python3 tests/startup.py
     python3 tests/keys.py
     python3 tests/settings.py
+    python3 tests/herdr_config.py
 
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored

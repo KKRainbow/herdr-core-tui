@@ -1,5 +1,6 @@
 mod actions;
 mod cli;
+mod config_edit;
 mod connection;
 mod control;
 mod copy;

@@ -62,9 +62,9 @@ Press prefix+? for the full keybind list and prefix+q to detach.
 | e | Open the pane's scrollback in `$EDITOR` |
 
 Unset by default, as in Herdr: `clear_pane`, `resize_pane_left/down/up/right`, `switch_workspace`, and `focus_agent`.
-Bind digit ranges as `"switch_workspace": "prefix+alt+1..9"`, or set `indexed.tabs`, `indexed.workspaces`, or `indexed.agents` to a modifier such as `alt`.
+Bind digit ranges as `switch_workspace = "prefix+alt+1..9"`, or set `[keys.indexed]` `tabs`, `workspaces`, or `agents` to a modifier such as `alt`.
 `navigate_workspace_up/down` and `navigate_pane_left/down/up/right` change the keys inside workspace navigation.
-Add custom command keys as Herdr's `[[keys.command]]` under `commands`, each with `key`, `command`, optional `type`, and `description`.
+Add custom command keys as Herdr's `[[keys.command]]` tables, each with `key`, `command`, optional `type`, and `description`.
 `shell` runs in the background with `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, `HERDR_ACTIVE_PANE_CWD`, and `HC_SESSION`; `pane` and `popup` open a zoomed pane.
 Clear pane drops this viewer's history and the rows above the cursor line; the program and other viewers keep theirs.
 
@@ -77,7 +77,7 @@ In the new worktree dialog, select `new branch` or `existing branch` with Tab or
 Use Up/Down or click to select the branch or checkout path field.
 The default path follows the branch name until you edit the path.
 Relative checkout paths start from the repository on the target machine.
-Set `worktrees.directory` in `config.json` to change where new checkouts go, as Herdr's `[worktrees] directory` does.
+Set `[worktrees] directory` to change where new checkouts go, as in Herdr.
 Removing a checkout with dirty files or unreferenced commits asks once more; `delete anyway` deletes that work.
 Pane menus also park the terminal without ending it.
 Right-click an agent without a pane to keep it in a new tab.
@@ -99,12 +99,15 @@ Worktree removal revalidates the checkout before it deletes it.
 
 ## Configuration
 
-Read preferences from `$XDG_CONFIG_HOME/herder-tui/config.json`, or `~/.config/herder-tui/config.json`.
-Set `theme` to a Herdr theme name such as `catppuccin`, `tokyo-night`, `dracula`, `nord`, or `gruvbox`.
-Set `status_indicators` to `dots` or `symbols`, `agent_panel_sort` to `spaces` or `priority`, and `sidebar_width`.
-Set `keys` to map Herdr `[keys]` action names to bindings, for example `{"next_agent": "prefix+a"}`.
+Settings use Herdr's `config.toml` format in `$XDG_CONFIG_HOME/herder-tui/config.toml`, or `~/.config/herder-tui/config.toml`.
+Without that file, the TUI reads Herdr's `config.toml` (`HERDR_CONFIG_PATH`, else `~/.config/herdr/config.toml`).
+The first change made in settings copies Herdr's file to the TUI's path; Herdr's file stays unchanged.
+Sections Herdr has and the TUI does not use are ignored.
+Set `[theme] name` to a Herdr theme such as `catppuccin`, `tokyo-night`, `dracula`, `nord`, or `gruvbox`, with `[theme.custom]` color tokens on top.
+Set `[ui] status_indicators` to `dots` or `symbols`, `agent_panel_sort` to `spaces` or `priority`, `sidebar_width`, and `accent`.
+Map Herdr `[keys]` action names to one binding or a list, for example `next_agent = "prefix+a"`.
 An empty binding disables an action.
-Set `sound` to `{"enabled": false}` to silence agents, or give `done_path` and `request_path` mp3 files to replace Herdr's sounds.
+Set `[ui.sound] enabled = false` to silence agents, or give `path`, `done_path`, and `request_path` mp3 files to replace Herdr's sounds.
 An agent asking a question always sounds; a finished agent sounds unless you are watching its pane.
 Sounds play through `paplay`, `pw-play`, `ffplay`, `mpg123`, or `mpv` on Linux and `afplay` on macOS.
 Set `HERDER_TUI_DISABLE_SOUND` to silence them for a session.

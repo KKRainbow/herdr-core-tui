@@ -12,7 +12,7 @@ use shell::{
         WorktreeRemove, global_menu_items, navigator_rows, navigator_selected_index,
         pane_move_destinations,
     },
-    palette::{Palette, THEME_NAMES, normalized_theme_name},
+    palette::{THEME_NAMES, normalized_theme_name},
     snapshot::Status,
 };
 
@@ -1175,39 +1175,30 @@ impl Workspace {
     /// Shows a highlighted theme at once; Esc goes back to the saved one.
     fn preview_settings(&mut self, settings: &Settings) {
         if settings.section == SettingsSection::Theme
-            && let Some(palette) = THEME_NAMES
-                .get(settings.selected)
-                .and_then(|name| Palette::from_name(name))
+            && let Some(name) = THEME_NAMES.get(settings.selected)
         {
-            self.config.palette = palette;
+            self.config.palette = self.preferences.palette(name);
         }
     }
 
     fn cancel_settings(&mut self, settings: Settings) {
-        if let Some(palette) = Palette::from_name(&settings.original_theme) {
-            self.config.palette = palette;
-        }
+        self.config.palette = self.preferences.palette(&settings.original_theme);
     }
 
     fn apply_settings(&mut self, mut settings: Settings) {
-        let (path, value): (&[&str], Value) = match settings.section {
+        use crate::config_edit::Edit;
+        let edit = match settings.section {
             SettingsSection::Theme => {
                 let Some(name) = THEME_NAMES.get(settings.selected) else {
                     return;
                 };
-                (&["theme"], json!(name))
+                Edit::Theme(name)
             }
-            SettingsSection::Indicators => (
-                &["status_indicators"],
-                json!(if settings.selected == 0 {
-                    "dots"
-                } else {
-                    "symbols"
-                }),
-            ),
-            SettingsSection::Sound => (&["sound", "enabled"], json!(settings.selected == 0)),
+            SettingsSection::Indicators if settings.selected == 0 => Edit::StatusIndicators("dots"),
+            SettingsSection::Indicators => Edit::StatusIndicators("symbols"),
+            SettingsSection::Sound => Edit::Sound(settings.selected == 0),
         };
-        let saved = crate::preferences::edit(path, value).and_then(|()| self.reload_config());
+        let saved = crate::preferences::edit(edit).and_then(|()| self.reload_config());
         match saved {
             Err(error) => {
                 self.toast(error.to_string(), true);

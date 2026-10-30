@@ -19,7 +19,7 @@ repo.mkdir()
 trees = core.root / "trees"
 config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui"
 config.mkdir(parents=True)
-(config / "config.json").write_text(json.dumps({"worktrees": {"directory": str(trees)}, "keys": {"remove_worktree": "prefix+y"}}))
+(config / "config.toml").write_text(f'[worktrees]\ndirectory = {json.dumps(str(trees))}\n\n[keys]\nremove_worktree = "prefix+y"\n')
 process = master = slave = None
 try:
     def git(*args, cwd=repo):

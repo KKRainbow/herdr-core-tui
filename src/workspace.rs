@@ -1,3 +1,4 @@
+mod git;
 mod interaction;
 mod render;
 use crate::{
@@ -117,7 +118,7 @@ pub struct Workspace {
     area: Rect,
     snapshot: Snapshot,
     git: HashMap<String, GitInfo>,
-    git_checked: HashMap<String, Instant>,
+    git_poller: git::Poller,
     focused: bool,
     peek: Option<String>,
     previous_pane: Option<String>,
@@ -365,7 +366,7 @@ impl Workspace {
         });
     }
     /// Asks git about each space's folder on its machine, at most every few seconds per folder.
-    async fn refresh_git(&mut self) -> bool {
+    fn refresh_git(&mut self) -> bool {
         let folders: HashSet<String> = self
             .snapshot
             .workspaces
@@ -373,36 +374,11 @@ impl Workspace {
             .map(|w| w.cwd.clone())
             .filter(|cwd| !cwd.is_empty())
             .collect();
-        self.git.retain(|cwd, _| folders.contains(cwd));
-        self.git_checked.retain(|cwd, _| folders.contains(cwd));
-        let git = herdr_client_lib::worktrees::Git {
-            client: self.session.client.clone(),
-            machine: self.machine.clone(),
-            deadline: TIME,
-        };
-        let mut changed = false;
-        for cwd in folders {
-            if self
-                .git_checked
-                .get(&cwd)
-                .is_some_and(|at| at.elapsed() < GIT_REFRESH)
-            {
-                continue;
-            }
-            self.git_checked.insert(cwd.clone(), Instant::now());
-            let info = git_info(&git, &cwd).await;
-            if self.git.get(&cwd) != info.as_ref() {
-                changed = true;
-                match info {
-                    Some(info) => self.git.insert(cwd, info),
-                    None => self.git.remove(&cwd),
-                };
-            }
-        }
-        changed
+        self.git_poller
+            .refresh(&self.machine, &self.session.client, folders, &mut self.git)
     }
     fn invalidate_git(&mut self) {
-        self.git_checked.clear();
+        self.git_poller.invalidate();
     }
     async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
         let visible: Vec<_> = self
@@ -842,7 +818,7 @@ pub async fn run(
         area: Rect::default(),
         snapshot: Snapshot::default(),
         git: HashMap::new(),
-        git_checked: HashMap::new(),
+        git_poller: git::Poller::default(),
         focused: true,
         peek: None,
         previous_pane: None,
@@ -856,7 +832,7 @@ pub async fn run(
     app.recover_placements().await;
     app.reconcile();
     app.refresh_snapshot();
-    app.refresh_git().await;
+    app.refresh_git();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         crate::restore();
@@ -875,6 +851,10 @@ pub async fn run(
     let mut retry = tokio::time::interval(Duration::from_secs(2));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        if connected {
+            app.refresh_snapshot();
+            dirty |= app.refresh_git();
+        }
         if dirty && render_due {
             let area = screen.size()?;
             app.geometry(Rect::new(0, 0, area.width, area.height));
@@ -896,17 +876,24 @@ pub async fn run(
             Retry,
             Paint,
             Control(crate::control::Request),
+            Git(git::Update),
         }
         let next = tokio::select! {
         _=&mut interrupt=>break,
         event=events.next()=>Next::Host(event),
         Some(request)=endpoint.requests.recv()=>Next::Control(request),
         output=next_output(&mut app.surfaces)=>Next::Output(output.0,output.1),
+        update=app.git_poller.next(),if connected=>Next::Git(update),
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
         _=redraw.tick(),if dirty=>Next::Paint,
         };
         match next {
+            Next::Git(update) => {
+                app.refresh_snapshot();
+                dirty |= app.refresh_git();
+                dirty |= app.git_poller.apply(update, &mut app.git);
+            }
             Next::Paint => render_due = true,
             Next::Control(request) => {
                 let quit = request.command == "quit";
@@ -1030,8 +1017,6 @@ pub async fn run(
                 }
                 if connected {
                     dirty |= app.recover_placements().await;
-                    app.refresh_snapshot();
-                    dirty |= app.refresh_git().await;
                 }
                 if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
                     match app.refresh_identities().await {

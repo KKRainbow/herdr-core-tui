@@ -42,8 +42,12 @@ try:
             if select.select([master], [], [], .05)[0]:
                 output += os.read(master, 65536)
         assert marker in output, output[-2000:]
+        return output
 
-    wait_for(b"agents")
+    # Git group metadata now arrives after the first frame.
+    initial = wait_for(b"agents")
+    if "└─".encode() not in initial:
+        wait_for("└─".encode())
     os.write(master, b"\x02D")
     wait_for(b"Close worktree group?")
     # Add work to the last member through a second client while the dialog is open.

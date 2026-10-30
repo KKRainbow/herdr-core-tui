@@ -362,6 +362,15 @@ impl Workspace {
             "zoom" => self.toggle_zoom(),
             "resize_mode" => self.mode = Mode::Resize,
             "toggle_sidebar" => self.toggle_sidebar(),
+            action if action.starts_with("command:") => {
+                if let Some(command) = action[8..]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| self.preferences.commands.get(i).cloned())
+                {
+                    self.run_custom_command(command).await;
+                }
+            }
             action if action.starts_with("switch_workspace:") => {
                 let index: usize = action[17..].parse().unwrap_or(1);
                 let entries =
@@ -1037,6 +1046,89 @@ impl Workspace {
                 remove.force_confirmation = false;
                 remove.error = Some(error.to_string());
                 self.overlay = Some(Overlay::WorktreeRemove(remove));
+            }
+        }
+    }
+
+    // ---- custom commands (Herdr `src/app/custom_commands.rs`) --------------
+
+    /// What a custom command learns about the viewer, under Herdr's variable names.
+    fn custom_command_env(&self) -> (BTreeMap<String, String>, Option<String>) {
+        let view = self.view();
+        let mut env = BTreeMap::new();
+        if let Some((session, _)) = self.view_key.rsplit_once(':') {
+            env.insert("HC_SESSION".to_owned(), session.to_owned());
+        }
+        for (name, value) in [
+            ("HERDR_ACTIVE_WORKSPACE_ID", &view.active_space),
+            ("HERDR_ACTIVE_TAB_ID", &view.active_tab),
+            ("HERDR_ACTIVE_PANE_ID", &view.focused),
+        ] {
+            if let Some(value) = value {
+                env.insert(name.to_owned(), value.clone());
+            }
+        }
+        let cwd = self
+            .active_id()
+            .and_then(|id| self.surfaces.get(&id))
+            .and_then(|s| {
+                self.session
+                    .terminals
+                    .values()
+                    .find(|r| r.address == s.address)
+            })
+            .and_then(|r| r.folder())
+            .map(str::to_owned);
+        if let Some(cwd) = &cwd {
+            env.insert("HERDR_ACTIVE_PANE_CWD".to_owned(), cwd.clone());
+        }
+        (env, cwd)
+    }
+
+    async fn run_custom_command(&mut self, command: crate::preferences::Command) {
+        use crate::preferences::CommandKind;
+        let (env, cwd) = self.custom_command_env();
+        match command.kind {
+            CommandKind::Shell => {
+                let mut process = std::process::Command::new("/bin/sh");
+                process
+                    .args(["-lc", &command.command])
+                    .envs(&env)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // The folder belongs to the terminal's machine; use it only when it is here too.
+                if let Some(cwd) =
+                    cwd.filter(|c| self.machine.is_empty() && std::path::Path::new(c).is_dir())
+                {
+                    process.current_dir(cwd);
+                }
+                match process.spawn() {
+                    Ok(mut child) => {
+                        std::thread::spawn(move || child.wait());
+                    }
+                    Err(error) => self.toast(error.to_string(), true),
+                }
+            }
+            CommandKind::Pane | CommandKind::Popup => {
+                let Some(pane) = self.view().focused.filter(|_| self.peek.is_none()) else {
+                    return self.toast("custom pane commands need a focused pane", true);
+                };
+                if self
+                    .run(
+                        "pane.split",
+                        json!({"id":pane,"axis":"row","line":command.command,"env":env}),
+                    )
+                    .await
+                    .is_some()
+                {
+                    let view = self.view_mut();
+                    let focused = view.focused.clone();
+                    view.zoom(focused.as_deref());
+                }
+            }
+            CommandKind::PluginAction => {
+                self.toast("plugin actions are not supported by herder-tui", true);
             }
         }
     }

@@ -676,7 +676,7 @@ impl Workspace {
         if self.chrome_saved.agent_panel_sort.is_some() {
             self.config.sort = sort;
         }
-        self.keys = Keymap::new(&self.preferences.keys);
+        self.keys = self.preferences.keymap();
         Ok(())
     }
 }
@@ -847,7 +847,7 @@ pub async fn run(
         sidebar_collapsed: chrome_saved.sidebar_collapsed,
         chrome_saved,
         config: shell_config,
-        keys: Keymap::new(&preferences.keys),
+        keys: preferences.keymap(),
         preferences,
         layout: shell::Layout::default(),
         area: Rect::default(),

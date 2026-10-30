@@ -1,7 +1,7 @@
 //! Herdr's default keymap and keybind help, adapted from Herdr `src/config/model.rs`
 //! and `src/input/keybind_help.rs`.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 /// Actions use Herdr's `[keys]` names so its documentation applies.
 pub const DEFAULTS: &[(&str, &str)] = &[
@@ -242,6 +242,8 @@ impl Binding {
 pub struct Keymap {
     pub prefix: Combo,
     bindings: Vec<(String, Binding)>,
+    /// Herdr's `[[keys.command]]` bindings with their descriptions, as `command:N`.
+    commands: Vec<(Binding, Option<String>)>,
     ranges: Vec<(String, Range)>,
     navigation: Vec<(String, Combo)>,
 }
@@ -254,6 +256,14 @@ impl Default for Keymap {
 
 impl Keymap {
     pub fn new(overrides: &BTreeMap<String, String>) -> Self {
+        Self::with_commands(overrides, &[])
+    }
+
+    /// Adds custom command keys after the built-in actions; a key already taken is skipped.
+    pub fn with_commands(
+        overrides: &BTreeMap<String, String>,
+        commands: &[(String, Option<String>)],
+    ) -> Self {
         let value = |action: &str, default: &str| {
             overrides
                 .get(action)
@@ -291,12 +301,38 @@ impl Keymap {
                 Some(((*action).to_owned(), binding.combo))
             })
             .collect();
-        Self {
+        let mut keymap = Self {
             prefix,
             bindings,
             ranges,
             navigation,
+            commands: vec![],
+        };
+        for (key, description) in commands {
+            let binding = parse(key).filter(|b| {
+                !keymap.bindings.iter().any(|(_, existing)| existing == b)
+                    && !(b.prefix && b.combo == prefix)
+            });
+            // Kept in place even when unusable, so `command:N` indexes the config list.
+            keymap.commands.push((
+                binding.unwrap_or(Binding {
+                    prefix: true,
+                    combo: Combo {
+                        code: KeyCode::Null,
+                        modifiers: KeyModifiers::empty(),
+                    },
+                }),
+                description.clone(),
+            ));
         }
+        keymap
+    }
+
+    fn command(&self, combo: Combo, prefix: bool) -> Option<String> {
+        self.commands
+            .iter()
+            .position(|(binding, _)| binding.prefix == prefix && binding.combo == combo)
+            .map(|index| format!("command:{index}"))
     }
 
     pub fn prefix_label(&self) -> String {
@@ -354,6 +390,7 @@ impl Keymap {
             return Some(action.clone());
         }
         self.range(combo, true)
+            .or_else(|| self.command(combo, true))
     }
 
     pub fn direct(&self, key: &KeyEvent) -> Option<String> {
@@ -363,6 +400,7 @@ impl Keymap {
             .find(|(_, binding)| !binding.prefix && binding.combo == combo)
             .map(|(action, _)| action.clone())
             .or_else(|| self.range(combo, false))
+            .or_else(|| self.command(combo, false))
     }
 
     pub fn is_prefix(&self, key: &KeyEvent) -> bool {
@@ -370,15 +408,15 @@ impl Keymap {
     }
 }
 
-pub type HelpGroup = (&'static str, Vec<(String, &'static str)>);
+pub type HelpGroup = (&'static str, Vec<(String, Cow<'static, str>)>);
 
 pub fn help_groups(keys: &Keymap) -> Vec<HelpGroup> {
-    let entry = |action: &str, label: &'static str| (keys.label(action), label);
-    vec![
+    let entry = |action: &str, label: &'static str| (keys.label(action), Cow::Borrowed(label));
+    let mut groups = vec![
         (
             "global",
             vec![
-                (keys.prefix_label(), "prefix mode"),
+                (keys.prefix_label(), Cow::Borrowed("prefix mode")),
                 entry("help", "keybinds"),
                 entry("settings", "settings"),
                 entry("detach", "detach"),
@@ -389,14 +427,14 @@ pub fn help_groups(keys: &Keymap) -> Vec<HelpGroup> {
         (
             "navigation",
             vec![
-                ("esc".into(), "back"),
+                ("esc".into(), Cow::Borrowed("back")),
                 (
                     format!(
                         "{} / {}",
                         keys.label("navigate_workspace_up"),
                         keys.label("navigate_workspace_down")
                     ),
-                    "workspace list",
+                    Cow::Borrowed("workspace list"),
                 ),
                 (
                     format!(
@@ -406,11 +444,11 @@ pub fn help_groups(keys: &Keymap) -> Vec<HelpGroup> {
                         keys.label("navigate_pane_up"),
                         keys.label("navigate_pane_right")
                     ),
-                    "move focus",
+                    Cow::Borrowed("move focus"),
                 ),
-                ("tab / shift+tab".into(), "cycle pane"),
-                ("enter".into(), "open workspace"),
-                ("1..9".into(), "switch workspace"),
+                ("tab / shift+tab".into(), Cow::Borrowed("cycle pane")),
+                ("enter".into(), Cow::Borrowed("open workspace")),
+                ("1..9".into(), Cow::Borrowed("switch workspace")),
             ],
         ),
         (
@@ -470,7 +508,24 @@ pub fn help_groups(keys: &Keymap) -> Vec<HelpGroup> {
                 entry("last_pane", "last pane"),
             ],
         ),
-    ]
+    ];
+    let custom: Vec<_> = keys
+        .commands
+        .iter()
+        .filter(|(binding, _)| binding.combo.code != KeyCode::Null)
+        .map(|(binding, description)| {
+            (
+                binding.label(),
+                description
+                    .clone()
+                    .map_or(Cow::Borrowed("custom command"), Cow::Owned),
+            )
+        })
+        .collect();
+    if !custom.is_empty() {
+        groups.push(("custom", custom));
+    }
+    groups
 }
 
 pub fn filter_help_groups(groups: Vec<HelpGroup>, query: &str) -> Vec<HelpGroup> {
@@ -594,6 +649,40 @@ mod tests {
         assert_eq!(
             keys.navigation(&key(KeyCode::Char('h'), KeyModifiers::empty())),
             None
+        );
+    }
+
+    #[test]
+    fn custom_commands_follow_builtins_and_keep_their_index() {
+        let keys = Keymap::with_commands(
+            &BTreeMap::new(),
+            &[
+                ("prefix+c".to_owned(), None),
+                ("prefix+y".to_owned(), Some("lazygit".to_owned())),
+                ("alt+g".to_owned(), None),
+            ],
+        );
+        // prefix+c stays new_tab; the second command keeps index 1.
+        assert_eq!(
+            keys.prefixed(&key(KeyCode::Char('c'), KeyModifiers::empty()))
+                .as_deref(),
+            Some("new_tab")
+        );
+        assert_eq!(
+            keys.prefixed(&key(KeyCode::Char('y'), KeyModifiers::empty()))
+                .as_deref(),
+            Some("command:1")
+        );
+        assert_eq!(
+            keys.direct(&key(KeyCode::Char('g'), KeyModifiers::ALT))
+                .as_deref(),
+            Some("command:2")
+        );
+        let custom = help_groups(&keys).pop().unwrap();
+        assert_eq!(custom.0, "custom");
+        assert_eq!(
+            custom.1[0],
+            ("prefix+y".to_owned(), Cow::Borrowed("lazygit"))
         );
     }
 }

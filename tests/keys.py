@@ -21,12 +21,16 @@ editor.chmod(0o700)
 core.env["EDITOR"] = str(editor)
 config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui"
 config.mkdir(parents=True)
+shell_result = core.root / "shell-command.txt"
 (config / "config.json").write_text(json.dumps({"keys": {
     "indexed.workspaces": "alt",
     "focus_agent": "prefix+alt+1..9",
     "resize_pane_right": "prefix+ctrl+l",
     "clear_pane": "prefix+y",
-}}))
+}, "commands": [
+    {"key": "prefix+u", "command": f"printf '%s %s' \"$HERDR_ACTIVE_PANE_ID\" \"$HC_SESSION\" > {shell_result}"},
+    {"key": "prefix+i", "command": "echo pane-command; sleep 60", "type": "pane", "description": "pane command"},
+]}))
 block = "printf '\\033]7501;state=working\\033\\\\'; sleep 3; printf '\\033]7501;state=blocked\\033\\\\'; sleep 180"
 process = master = slave = None
 try:
@@ -100,9 +104,16 @@ try:
     os.write(master, b"\x02e")
     until(lambda: result.exists(), "editor did not run after clear")
     assert "marker-1" not in result.read_text(), result.read_text()
+    # Custom commands: a background shell command sees Herdr's variables; a pane command opens zoomed.
+    focused = state()["focused"]
+    os.write(master, b"\x02u")
+    until(lambda: shell_result.exists() and shell_result.read_text(), "shell command did not run")
+    assert shell_result.read_text() == f"{focused} {core.env['HC_SESSION']}", shell_result.read_text()
+    os.write(master, b"\x02i")
+    until(lambda: state()["focused"] != focused and state()["zoomed"] == state()["focused"], "pane command did not open a zoomed pane")
     os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
-    print("PASS: indexed workspace keys, notification target, numbered agent focus, direct pane resize, scrollback in $EDITOR, clear pane")
+    print("PASS: custom shell and pane commands, indexed workspace keys, notification target, numbered agent focus, direct pane resize, scrollback in $EDITOR, clear pane")
 finally:
     if process and process.poll() is None:
         process.kill()

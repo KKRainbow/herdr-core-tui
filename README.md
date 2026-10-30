@@ -64,6 +64,8 @@ Press prefix+? for the full keybind list and prefix+q to detach.
 Unset by default, as in Herdr: `clear_pane`, `resize_pane_left/down/up/right`, `switch_workspace`, and `focus_agent`.
 Bind digit ranges as `"switch_workspace": "prefix+alt+1..9"`, or set `indexed.tabs`, `indexed.workspaces`, or `indexed.agents` to a modifier such as `alt`.
 `navigate_workspace_up/down` and `navigate_pane_left/down/up/right` change the keys inside workspace navigation.
+Add custom command keys as Herdr's `[[keys.command]]` under `commands`, each with `key`, `command`, optional `type`, and `description`.
+`shell` runs in the background with `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, `HERDR_ACTIVE_PANE_CWD`, and `HC_SESSION`; `pane` and `popup` open a zoomed pane.
 Clear pane drops this viewer's history and the rows above the cursor line; the program and other viewers keep theirs.
 
 Click spaces, tabs, and agents to navigate.

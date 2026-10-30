@@ -16,6 +16,32 @@ pub struct Preferences {
     pub keys: BTreeMap<String, String>,
     pub sound: Sound,
     pub worktrees: Worktrees,
+    /// Herdr's `[[keys.command]]`: keys that run a command.
+    pub commands: Vec<Command>,
+}
+/// One custom command binding, as Herdr's `CommandKeybindConfig`.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Command {
+    /// `prefix+g` for prefix mode, or a modified chord such as `alt+g`.
+    pub key: String,
+    pub command: String,
+    #[serde(rename = "type")]
+    pub kind: CommandKind,
+    pub description: Option<String>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandKind {
+    /// Runs in the background through the shell.
+    #[default]
+    Shell,
+    /// Runs in a new zoomed pane beside the focused one.
+    Pane,
+    /// Herdr's popup pane; here a zoomed pane as for `pane`.
+    Popup,
+    /// Herdr plugin actions; plugins are not part of this client.
+    PluginAction,
 }
 /// Herdr's `[worktrees]`: where new checkouts go.
 #[derive(Default, Serialize, Deserialize)]
@@ -67,10 +93,19 @@ impl Default for Preferences {
             keys: BTreeMap::new(),
             sound: Sound::default(),
             worktrees: Worktrees::default(),
+            commands: vec![],
         }
     }
 }
 impl Preferences {
+    pub fn keymap(&self) -> crate::shell::keys::Keymap {
+        let commands: Vec<_> = self
+            .commands
+            .iter()
+            .map(|c| (c.key.clone(), c.description.clone()))
+            .collect();
+        crate::shell::keys::Keymap::with_commands(&self.keys, &commands)
+    }
     pub fn shell(&self) -> crate::shell::Config {
         crate::shell::Config {
             palette: crate::shell::palette::Palette::from_name(&self.theme).unwrap_or_default(),

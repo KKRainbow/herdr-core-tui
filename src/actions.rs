@@ -80,7 +80,7 @@ fn focus_created(view: &mut View, document: &herdr_client_lib::document::Documen
         view.zoom(None);
     }
 }
-pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight | id, next, share\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm, force\nMachine, focus, zoom, copy and search are private viewer actions.";
+pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv, line, env\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight | id, next, share\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm, force\nMachine, focus, zoom, copy and search are private viewer actions.";
 
 /// Moves spaces together, in the given order, to just before `before` (or to the end).
 fn move_spaces(
@@ -415,7 +415,11 @@ pub async fn execute(
                     argv,
                     line: text(&args, "line").map(str::to_owned),
                     cwd: folder,
-                    env: Default::default(),
+                    env: args
+                        .get("env")
+                        .map(|env| serde_json::from_value(env.clone()))
+                        .transpose()?
+                        .unwrap_or_default(),
                 },
                 id("op"),
             )

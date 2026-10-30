@@ -14,7 +14,8 @@ Run `just check` and `just build`.
 
 ## Run
 
-Run `target/debug/herder-tui --session SESSION` for the workspace interface.
+Run `target/debug/herder-tui --session SESSION --instance NAME` for the workspace interface.
+The instance name is optional for interactive use and required for live control.
 Add a terminal address to use the single-terminal viewer.
 The core session is required.
 Set `HC_BINARY` to select a core executable.
@@ -89,3 +90,28 @@ Linux is the validated platform; native macOS and Windows checks are pending.
 `just app-integration` requires an isolated running app fixture, `TUI_APP_TEST_ROOT`, `TUI_APP_TEST_TERMINAL`, and `HC_SESSION`.
 Do not point integration tests at live work.
 See [validation](docs/validation.md) and [provenance](docs/provenance.md).
+
+## CLI and packaging
+
+Run `herder-tui --session SESSION do help` for shared command names and arguments.
+Pass arguments as one JSON object.
+Structural commands work while no TUI is open and require explicit target IDs.
+For example, `herder-tui --session work do tab.rename '{"id":"tb123","name":"Tests"}'` changes the shared tab.
+A close command first returns its affected terminals; submit again with `confirm: true` only when you intend to end them.
+Keep the returned review in `expected` to reject changed confirmation targets.
+
+Run `herder-tui --session SESSION instances` to list live viewers.
+Run `herder-tui --session SESSION --instance NAME view state` to inspect one viewer.
+Live view commands include `pane.focus`, `tab.focus`, `space.focus`, `agent.focus`, `zoom`, `machine`, and `quit`.
+Focus commands take an `id`; agent focus takes a `terminal` address.
+The control socket is private to the current user and disappears when the viewer exits.
+Each named instance has its own saved view.
+Use `hc` for terminal automation and machine management.
+
+Run `just install /chosen/prefix` to build an optimized binary and install it under that prefix's `bin` directory.
+This does not replace the installed app or core.
+Run `just package /path/herder-tui-source.tar.gz` to export the staged source tree with pinned Ghostty and library sources.
+The source bundle needs no sibling checkout and already includes its submodules.
+`distribution/client-revision` selects the library revision; `SOURCE-REVISIONS` records the bundle inputs.
+The development checkout keeps its sibling path dependency.
+Nothing is published or pushed by these recipes.

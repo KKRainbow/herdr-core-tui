@@ -47,6 +47,22 @@ fn target(args: &Value, view: &View, kind: &str) -> Result<String> {
         })
         .ok_or_else(|| "Select a target first".into())
 }
+fn layout_value(layout: &WriteOutcome) -> Value {
+    match layout {
+        WriteOutcome::Written => json!({"status":"written"}),
+        WriteOutcome::Conflict => json!({"status":"conflict"}),
+        WriteOutcome::Unavailable(error) => json!({"status":"unavailable","error":error}),
+    }
+}
+fn creation_value(result: &herdr_client_lib::commands::Creation) -> Value {
+    json!({"ok":matches!(result.layout,WriteOutcome::Written),"terminal":result.terminal,"correlation":result.correlation,"layout":layout_value(&result.layout)})
+}
+fn change_value(result: herdr_client_lib::commands::ChangeOutcome) -> Value {
+    json!({"ok":result.failure.is_none()&&matches!(result.layout,Some(WriteOutcome::Written)),"terminal":result.terminal,"effects":result.effects.iter().map(|effect|json!({"kind":format!("{:?}",effect.kind),"result":effect.result})).collect::<Vec<_>>(),"failure":result.failure.as_ref().map(|failure|json!({"kind":format!("{:?}",failure.kind),"error":failure.error.to_string()})),"layout":result.layout.as_ref().map(layout_value)})
+}
+fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
+    json!({"code":output.code,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)})
+}
 pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
 
 pub async fn execute(
@@ -84,7 +100,9 @@ pub async fn execute(
             return Err("The close target changed. Review it again.".into());
         }
         let result = session.close(assessment).await?;
-        return Ok(json!({"layout":format!("{:?}",result.layout),"observed":result.observed}));
+        return Ok(
+            json!({"ok":matches!(result.layout,WriteOutcome::Written),"layout":layout_value(&result.layout),"observed":result.observed}),
+        );
     }
     if command == "pane.resize" {
         let id = target(&args, view, "pane")?;
@@ -99,13 +117,20 @@ pub async fn execute(
     if command == "pane.move" {
         let id = target(&args, view, "pane")?;
         let dest = required(&args, "destination")?;
-        return Ok(
-            json!({"outcome":format!("{:?}",session.move_pane(machine,&id,dest,args["index"].as_u64().unwrap_or(0) as usize).await?)}),
-        );
+        return Ok(change_value(
+            session
+                .move_pane(
+                    machine,
+                    &id,
+                    dest,
+                    args["index"].as_u64().unwrap_or(0) as usize,
+                )
+                .await?,
+        ));
     }
     if command == "terminal.park" {
         let id = target(&args, view, "pane")?;
-        return Ok(json!({"outcome":format!("{:?}",session.park(machine,&id).await?)}));
+        return Ok(change_value(session.park(machine, &id).await?));
     }
     let document = session.document(machine)?;
     let folder = text(&args, "folder").map(str::to_owned).or_else(|| {
@@ -162,7 +187,7 @@ pub async fn execute(
         if let Ok(doc) = session.document(machine) {
             view.focus(&doc, &pane);
         }
-        return Ok(json!({"outcome":format!("{outcome:?}")}));
+        return Ok(change_value(outcome));
     }
     if command.starts_with("worktree.") {
         let git = Git {
@@ -191,7 +216,7 @@ pub async fn execute(
                 if let Ok(doc) = session.document(machine) {
                     view.focus(&doc, &pane);
                 }
-                return Ok(json!({"outcome":format!("{result:?}")}));
+                return Ok(creation_value(&result));
             }
             "worktree.new" => {
                 let repository = required(&args, "repository")?;
@@ -216,7 +241,13 @@ pub async fn execute(
                 if let Ok(doc) = session.document(machine) {
                     view.focus(&doc, &pane);
                 }
-                return Ok(json!({"outcome":format!("{result:?}")}));
+                let workspace = match &result.workspace {
+                    Ok(created) => creation_value(created),
+                    Err(error) => json!({"ok":false,"error":error.to_string()}),
+                };
+                return Ok(
+                    json!({"ok":result.git.code==Some(0)&&workspace["ok"]==true,"git":git_value(&result.git),"workspace":workspace}),
+                );
             }
             "worktree.remove" => {
                 let assessment = git
@@ -238,8 +269,13 @@ pub async fn execute(
                 {
                     return Err("Removal conditions changed. Review the checkout again.".into());
                 }
+                let result = git.remove_space(session, &assessment, close).await?;
+                let git = result.git.as_ref().map(|result| match result {
+                    Ok(output) => git_value(output),
+                    Err(error) => json!({"error":error.to_string()}),
+                });
                 return Ok(
-                    json!({"outcome":format!("{:?}",git.remove_space(session,&assessment,close).await?)}),
+                    json!({"ok":matches!(result.workspace.layout,WriteOutcome::Written)&&result.git.as_ref().is_some_and(|r|r.as_ref().is_ok_and(|o|o.code==Some(0))),"layout":layout_value(&result.workspace.layout),"observed":result.workspace.observed,"git":git}),
                 );
             }
             _ => return Err("Unknown worktree command".into()),
@@ -266,9 +302,11 @@ pub async fn execute(
         if let Ok(doc) = session.document(machine) {
             view.focus(&doc, &pane);
         }
-        return Ok(
-            json!({"terminal":result.terminal,"correlation":result.correlation,"layout":format!("{:?}",result.layout)}),
-        );
+        let mut value = creation_value(&result);
+        value["pane"] = json!(view.focused);
+        value["tab"] = json!(view.active_tab);
+        value["space"] = json!(view.active_space);
+        return Ok(value);
     }
     Err(format!("Unknown command: {command}").into())
 }

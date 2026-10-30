@@ -10,7 +10,7 @@ The tests cover Unicode width, true color, cursor, alternate screen, resize, app
 The isolated PTY check covers repaint, detach, repeated attach, host settings, and reconnect after core restart with a kept terminal.
 The app check covers an app-created terminal, TUI input to the same process, and app retention after TUI detach.
 Host cleanup uses a drop guard for returned errors and a panic hook.
-Attach failure is tested; a fault injected after terminal setup remains a separate validation task.
+Attach failure and a fault injected after terminal setup both restore the host terminal.
 
 ## Remaining validation
 
@@ -24,3 +24,14 @@ The core workflow check passes creation, split, resize, swap, stale close reject
 The unchanged app check passes TUI tab creation, mouse-driven rename, split, explicit close, independent app focus/zoom, and host restoration.
 A synthetic OSC 7501 fixture passes status display and keyboard navigation for an agent without a pane.
 The interface uses bounded scrollback and detaches hidden viewer streams.
+
+## CLI and independent packaging
+
+Rust 1.89 checks all TUI targets successfully.
+The source bundle builds with its vendored pinned library and Ghostty outside the checkout.
+The optimized installed binary passes the CLI integration test from a scratch prefix.
+Headless structural commands work without a TUI.
+Two live instances retain different focus and zoom, require explicit targeting, and remove their control endpoints on exit.
+An injected save error after terminal setup restores the host settings and leaves shared terminals alive.
+Rust dependency notices and license texts are included in the source bundle.
+The local control transport currently uses Unix sockets; Windows needs a native transport before support can be advertised.

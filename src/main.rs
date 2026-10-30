@@ -1,5 +1,7 @@
 mod actions;
+mod cli;
 mod connection;
+mod control;
 mod copy;
 mod dialog;
 mod editor;
@@ -16,7 +18,7 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures_util::StreamExt;
-use herdr_client_lib::{client::StreamEvent, transport::HcConfig};
+use herdr_client_lib::client::StreamEvent;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -54,6 +56,8 @@ fn restore() {
         event::DisableFocusChange,
         event::DisableBracketedPaste,
         cursor::Show,
+        crossterm::style::ResetColor,
+        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
         LeaveAlternateScreen
     );
     let _ = terminal::disable_raw_mode();
@@ -73,31 +77,28 @@ async fn main() {
 async fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!(
-            "herder-tui --session SESSION TERMINAL\nAttach to an existing core terminal. Ctrl+Q detaches.\nSet HC_BINARY to select hc."
-        );
+        println!("{}", cli::HELP);
         return Ok(());
     }
     if args == ["--version"] {
         println!("herder-tui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if !(2..=3).contains(&args.len()) || args[0] != "--session" || args[1].is_empty() {
-        return Err("usage: herder-tui --session SESSION TERMINAL".into());
+    let options = cli::parse(args)?;
+    if cli::headless(&options).await? {
+        return Ok(());
     }
-    let config = HcConfig {
-        binary: std::env::var_os("HC_BINARY")
-            .unwrap_or_else(|| "hc".into())
-            .into(),
-        session: args[1].clone(),
-        environment: Default::default(),
-    };
-    if args.len() == 2 {
-        return workspace::run(config).await;
+    if options.positional.is_empty() {
+        return workspace::run(options.config, options.machine, options.instance).await;
     }
+    if options.positional.len() != 1 {
+        return Err("Expected one terminal address".into());
+    }
+    let target = herdr_client_lib::commands::qualify(&options.positional[0], &options.machine);
+    let config = options.config;
     let mut size = terminal::size()?;
     let mut connection =
-        Some(connection::Connection::connect(&config, &args[2], size, false).await?);
+        Some(connection::Connection::connect(&config, &target, size, false).await?);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -121,7 +122,7 @@ async fn run() -> Result<()> {
         let Some(current) = connection.as_mut() else {
             tokio::select! {
                 _=&mut interrupt=>break,
-                result=connection::Connection::connect(&config,&args[2],size,true)=> {
+                result=connection::Connection::connect(&config,&target,size,true)=> {
                     match result {
                         Ok(new)=>{let dimensions=new.size();vt=vt::Vt::new(dimensions.0,dimensions.1);connection=Some(new);dirty=true;}
                         Err(_)=>{tokio::select! { _=retry.tick()=>{}, event=events.next()=>{if handle_offline(event, &mut size)? {break;}} }}

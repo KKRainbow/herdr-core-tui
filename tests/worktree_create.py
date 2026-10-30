@@ -15,7 +15,8 @@ from fixture import Core
 
 binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
 core = Core("worktree-create")
-repo = core.root
+repo = core.root / core.root.name
+repo.mkdir()
 checkout_base = pathlib.Path.home() / ".herdr/worktrees" / repo.name
 assert not checkout_base.exists(), checkout_base
 process = master = slave = None
@@ -51,7 +52,9 @@ try:
         return output
 
     def view(command, args):
-        return json.loads(subprocess.check_output([str(binary), "--instance", "worktree-create", "view", command, json.dumps(args)], env=core.env, timeout=5))
+        result = subprocess.run([str(binary), "--instance", "worktree-create", "view", command, json.dumps(args)], env=core.env, capture_output=True, timeout=5)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
 
     def open_dialog(branch):
         view("space.focus", {"id": source_space})
@@ -67,13 +70,18 @@ try:
         end = time.monotonic() + 10
         while time.monotonic() < end:
             read_for()
-            spaces = core.rpc("doc.get", {"name": "herdr-app"})["value"]["spaces"]
-            if len(spaces) == count and any(space.get("folder") == str(path) for space in spaces):
+            document = core.rpc("doc.get", {"name": "herdr-app"})
+            spaces = document["value"]["spaces"]
+            space = next((space for space in spaces if space.get("folder") == str(path)), None)
+            state = view("state", {})
+            pane = next((pane for pane in state["panes"] if pane["id"] == state["view"]["focused"]), None)
+            if len(spaces) == count and space and state["document_available"] and state["document_version"] == document["version"] and state["view"]["active_space"] == space["id"] and pane:
                 break
         else:
-            raise AssertionError(spaces)
+            raise AssertionError((spaces, state))
         assert subprocess.check_output(["git", "-C", str(path), "branch", "--show-current"]).decode().strip() == branch
         assert git("rev-parse", branch) == original_commit
+        assert pathlib.Path(core.rpc("terminal.get", {"terminal": pane["terminal"]})["cwd"]) == path
 
     wait_for(b"main")
     open_dialog("new-ui")
@@ -113,10 +121,21 @@ try:
     read_for()
     os.write(master, b"\x15custom-existing\r")
     verify("custom-existing", 6, mouse_path)
-    assert len(git("worktree", "list", "--porcelain").split("worktree ")) - 1 == 6
+
+    for count, branch, relative, existing in (
+        (7, "relative-new", "../custom-checkout", False),
+        (8, "relative-existing", "../existing 'checkout' $(literal)", True),
+    ):
+        if existing:
+            git("branch", branch)
+        open_dialog(branch)
+        os.write(master, (b"\t" if existing else b"") + b"\x1b[B\x15" + relative.encode() + b"\r")
+        path = (repo / relative).resolve()
+        verify(branch, count, path)
+    assert len(git("worktree", "list", "--porcelain").split("worktree ")) - 1 == 8
     os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
-    print("PASS: default paths follow branch edits, new/existing branches, custom paths via keyboard/paste/mouse, empty path retry, custom paths survive branch edits, branch commits preserved")
+    print("PASS: default paths follow branch edits, new/existing branches, custom paths via keyboard/paste/mouse, empty path retry, custom paths survive branch edits, relative paths open and focus shared spaces, branch commits preserved")
 finally:
     if process and process.poll() is None:
         process.kill()

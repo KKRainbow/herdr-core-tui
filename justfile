@@ -39,6 +39,9 @@ cli-integration: build
 discovery-integration: build
     python3 tests/discovery.py
 
+chrome-integration: build
+    python3 tests/chrome.py
+
 msrv:
     cargo +1.89.0 check --all-targets --locked
 

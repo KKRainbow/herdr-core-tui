@@ -46,6 +46,9 @@ Ctrl+C goes to the focused program.
 | ? | Help |
 
 Click spaces, tabs, and terminals to navigate.
+Click `new` below the spaces to create a workspace, or `menu` for all actions.
+Click `+` beside the tabs to create a tab.
+Click `[→]` or `[↓]` on a pane border to split it right or down.
 The terminal list includes ordinary running programs that do not report agent status.
 Opening an unplaced terminal previews it without changing the shared layout.
 Right-click a pane for the actions menu.
@@ -97,6 +100,8 @@ Native macOS is unvalidated; Windows also needs a native local control transport
 Do not point integration tests at live work.
 `just remote-integration`, `just geometry-integration`, and `just compatibility-integration` use new scratch cores.
 `just cli-integration` verifies headless operations and multiple live instances.
+`just discovery-integration` verifies hc session defaults and terminal discovery.
+`just chrome-integration` verifies the visible buttons and mouse workflows.
 `just profile` measures one and fifteen output-producing panes.
 See [validation](docs/validation.md), [performance](docs/performance.md), and [provenance](docs/provenance.md).
 

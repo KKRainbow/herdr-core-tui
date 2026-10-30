@@ -46,6 +46,8 @@ struct Surface {
 }
 #[derive(Clone)]
 enum Hit {
+    Action(&'static str),
+    Split(String, &'static str),
     Space(String),
     Tab(String),
     Pane(String),

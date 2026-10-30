@@ -8,13 +8,15 @@ Original Herdr, app, core, and Libertty source checkouts were not changed.
 
 | Check | Result |
 |---|---|
-| Formatting, Clippy, fast behavior tests | Passed: nine tests |
+| Formatting, Clippy, fast behavior tests | Passed: sixteen tests |
 | Rust 1.89.0 | All targets checked |
 | PTY lifecycle | Repaint, repeated attach, detach, core restart, kept process, host restoration |
 | Workspace workflows | Creation, split, resize, swap, stale close rejection, worktree creation/removal |
 | Unchanged app | App-created terminal, TUI input, TUI-created tab, mouse rename, split, close |
 | Independent views | App focus/zoom unchanged; two TUI instances retain separate view state |
 | CLI | Headless shared operations, explicit live instance targeting, endpoint cleanup |
+| Session discovery | Default, inherited, and explicit sessions; ordinary live terminals; private unplaced-terminal preview |
+| Mouse controls | Empty-state New/Menu, space and tab creation, both pane split buttons, tab overflow, narrow layouts |
 | Host errors | Attach failure and injected save error restore terminal settings |
 | Agent reports | Synthetic OSC 7501 status and keyboard navigation without a pane |
 | Unknown content | Mod placeholder and lossless unrelated edits preserve opaque properties |

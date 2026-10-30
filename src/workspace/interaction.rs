@@ -284,6 +284,10 @@ impl Workspace {
                     }
                 }
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                    && !self.hits.iter().any(|(rect, hit)| {
+                        matches!(hit, Hit::Split(..))
+                            && rect.contains((mouse.column, mouse.row).into())
+                    })
                     && self.peek.is_none()
                     && self.view().zoomed.is_none()
                     && let Some(doc) = self.document()
@@ -333,6 +337,15 @@ impl Workspace {
                     && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
                 {
                     match hit {
+                        Hit::Action(action) => {
+                            self.action(action).await?;
+                            return Ok(false);
+                        }
+                        Hit::Split(id, action) => {
+                            self.focus(&id);
+                            self.action(action).await?;
+                            return Ok(false);
+                        }
                         Hit::Space(id) | Hit::Tab(id) => {
                             if let Some(doc) = self.document()
                                 && let Some(pane) = remembered_pane(&self.view(), &doc, &id)

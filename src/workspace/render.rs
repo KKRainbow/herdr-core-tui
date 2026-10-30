@@ -34,38 +34,103 @@ impl Workspace {
             )),
             sidebar_area,
         );
-        let mut y = 1;
+        let footer = (sidebar_area.height / 2)
+            .max(3)
+            .min(sidebar_area.height.saturating_sub(1));
+        let content_width = width.saturating_sub(1);
+        frame.render_widget(
+            Paragraph::new(" spaces").style(Style::default().fg(Color::DarkGray)),
+            Rect::new(0, 1, content_width, u16::from(sidebar_area.height > 1)),
+        );
+        let mut y = 2;
         if let Some(doc) = &doc {
-            for space in doc.value()["spaces"].as_array().into_iter().flatten() {
-                if y >= area.height.saturating_sub(4) {
+            let spaces = doc.value()["spaces"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let capacity = footer.saturating_sub(y) as usize;
+            let selected = spaces
+                .iter()
+                .position(|s| s["id"].as_str() == view.active_space.as_deref())
+                .unwrap_or(0);
+            let start = selected.saturating_sub(capacity.saturating_sub(1));
+            for space in spaces.iter().skip(start) {
+                if y >= footer {
                     break;
                 }
                 let id = space["id"].as_str().unwrap_or("");
-                let text = format!(
-                    "{} {}",
-                    if view.active_space.as_deref() == Some(id) {
-                        "▸"
-                    } else {
-                        " "
-                    },
-                    space["name"].as_str().unwrap_or("Workspace")
-                );
+                let selected = view.active_space.as_deref() == Some(id);
+                let name = space["name"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        space["folder"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.trim_end_matches('/').rsplit('/').next().unwrap_or(s))
+                    })
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Workspace");
+                let text = format!("{} {}", if selected { "▸" } else { " " }, name);
                 let row = Rect::new(0, y, width.saturating_sub(1), 1);
-                frame.render_widget(Paragraph::new(text), row);
+                frame.render_widget(
+                    Paragraph::new(text).style(if selected {
+                        Style::default().fg(Color::Cyan).bg(Color::DarkGray)
+                    } else {
+                        Style::default()
+                    }),
+                    row,
+                );
                 self.hits.push((row, Hit::Space(id.into())));
                 y += 1;
             }
         }
-        y += 1;
-        if y < area.height.saturating_sub(2) {
+        if sidebar_area.height >= 4 && content_width >= 2 {
+            let new_width = (content_width / 2).min(5);
+            let menu_width = (content_width - new_width).min(4);
+            let new = Rect::new(0, footer, new_width, 1);
+            let menu = Rect::new(content_width - menu_width, footer, menu_width, 1);
+            button(frame, new, if content_width >= 8 { " new" } else { "+" });
+            button(frame, menu, if content_width >= 8 { "menu" } else { "≡" });
+            self.hits.push((new, Hit::Action("space.new")));
+            self.hits.push((menu, Hit::Action("menu")));
+        }
+        y = footer.saturating_add(1);
+        if y < sidebar_area.height {
+            frame.render_widget(
+                Paragraph::new("─".repeat(content_width as usize))
+                    .style(Style::default().fg(Color::DarkGray)),
+                Rect::new(0, y, content_width, 1),
+            );
+            y += 1;
+        }
+        if y < sidebar_area.height {
             frame.render_widget(
                 Paragraph::new(" Terminals").style(Style::default().fg(Color::Cyan)),
                 Rect::new(0, y, width.saturating_sub(1), 1),
             );
             y += 1;
         }
-        for (identity, record) in &self.session.terminals {
-            if y >= area.height.saturating_sub(2) {
+        let terminals: Vec<_> = self
+            .session
+            .terminals
+            .iter()
+            .filter(|(_, r)| {
+                r["state"] == "live" || r["reported"] == true || !r["status"].is_null()
+            })
+            .collect();
+        let active = self
+            .active_id()
+            .and_then(|id| self.surfaces.get(&id))
+            .map(|s| s.address.as_str());
+        let selected = terminals
+            .iter()
+            .position(|(_, r)| r["address"].as_str() == active)
+            .unwrap_or(0);
+        let start = selected
+            .saturating_sub((sidebar_area.height.saturating_sub(y) as usize).saturating_sub(1));
+        for (identity, record) in terminals.into_iter().skip(start) {
+            if y >= sidebar_area.height {
                 break;
             }
             let Some(address) = record["address"].as_str() else {
@@ -122,15 +187,16 @@ impl Workspace {
                 .iter()
                 .position(|tab| tab["id"].as_str() == view.active_tab.as_deref())
                 .unwrap_or(0);
-            let start = tab_window_start(&widths, active, area.width.saturating_sub(width));
+            let tab_right = area.width.saturating_sub(3).max(width);
+            let start = tab_window_start(&widths, active, tab_right.saturating_sub(width));
             for (tab, title) in tabs.iter().zip(titles.iter()).skip(start) {
-                if x >= area.width {
+                if x >= tab_right {
                     break;
                 }
                 let id = tab["id"].as_str().unwrap_or("");
                 let w = (unicode_width::UnicodeWidthStr::width(title.as_str())
                     .min(u16::MAX as usize) as u16)
-                    .min(area.width.saturating_sub(x));
+                    .min(tab_right.saturating_sub(x));
                 let rect = Rect::new(x, 0, w, 1);
                 frame.render_widget(
                     Paragraph::new(title.as_str()).style(Style::default().fg(
@@ -145,6 +211,14 @@ impl Workspace {
                 self.hits.push((rect, Hit::Tab(id.into())));
                 x += w;
             }
+            let new_tab = Rect::new(
+                x,
+                0,
+                3.min(area.width.saturating_sub(x)),
+                u16::from(area.height > 0),
+            );
+            button(frame, new_tab, " + ");
+            self.hits.push((new_tab, Hit::Action("tab.new")));
         }
         for pane in &self.panes {
             let active = self.peek.is_some() || view.focused.as_deref() == Some(&pane.id);
@@ -158,6 +232,14 @@ impl Workspace {
                     Color::DarkGray
                 }));
             frame.render_widget(block, pane.area);
+            if !pane.id.starts_with('@') && pane.area.width >= 16 && pane.area.height > 0 {
+                for (offset, label, action) in [(7, "[→]", "split.row"), (4, "[↓]", "split.column")]
+                {
+                    let rect = Rect::new(pane.area.right() - offset, pane.area.y, 3, 1);
+                    button(frame, rect, label);
+                    self.hits.push((rect, Hit::Split(pane.id.clone(), action)));
+                }
+            }
             let area = inner(pane.area);
             self.hits.push((pane.area, Hit::Pane(pane.id.clone())));
             if let Some(surface) = self.surfaces.get_mut(&pane.id) {
@@ -181,7 +263,7 @@ impl Workspace {
                 Paragraph::new(if doc.is_none() {
                     "Workspace unavailable; waiting for its machine"
                 } else {
-                    "Ctrl+B s: new space   Ctrl+B ?: help"
+                    "Click new to create a space, or select a running terminal."
                 }),
                 Rect::new(width + 1, 2, area.width.saturating_sub(width + 1), 1),
             );
@@ -201,6 +283,13 @@ impl Workspace {
             crate::dialog::render(frame, dialog);
         }
     }
+}
+
+fn button(frame: &mut ratatui::Frame, area: Rect, label: &str) {
+    frame.render_widget(
+        Paragraph::new(label).style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        area,
+    );
 }
 
 fn tab_window_start(widths: &[u16], active: usize, available: u16) -> usize {

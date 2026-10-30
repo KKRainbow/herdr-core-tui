@@ -760,8 +760,12 @@ impl Workspace {
             nouns[((seed / 8) % 8) as usize],
             seed & 0xffff
         );
-        let Some(checkout_path) = self.default_checkout(&repository, &branch).await else {
-            return;
+        let checkout_path = match self.git().default_path(&repository, &branch).await {
+            Ok(path) => path,
+            Err(error) => {
+                self.toast(error.to_string(), true);
+                return;
+            }
         };
         self.overlay = Some(Overlay::WorktreeCreate(WorktreeCreate {
             repository,
@@ -772,34 +776,6 @@ impl Workspace {
         }));
     }
 
-    /// Herdr's `~/.herdr/worktrees/<repo>/<branch>` on the space's machine. The home folder is
-    /// resolved through symlinks so the path matches what git reports for the checkout.
-    async fn default_checkout(&mut self, repository: &str, branch: &str) -> Option<String> {
-        let git = self.git();
-        let physical = git
-            .exec(
-                vec!["sh".into(), "-c".into(), "cd \"$HOME\" && pwd -P".into()],
-                None,
-            )
-            .await
-            .ok()
-            .filter(|output| output.code == Some(0))
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .filter(|home| !home.is_empty());
-        let repo = snapshot::folder_label(repository);
-        let slug = herdr_client_lib::worktrees::slug(branch);
-        match physical {
-            Some(home) => Some(format!("{home}/.herdr/worktrees/{repo}/{slug}")),
-            None => match git.default_path(repository, branch).await {
-                Ok(path) => Some(path),
-                Err(error) => {
-                    self.toast(describe(&error), true);
-                    None
-                }
-            },
-        }
-    }
-
     async fn open_worktree_open(&mut self, space: &str) {
         let Some(repository) = self.repository(space) else {
             self.toast("not a git repository", true);
@@ -808,7 +784,7 @@ impl Workspace {
         let checkouts = match self.git().list(&repository).await {
             Ok(list) => list,
             Err(error) => {
-                self.toast(describe(&error), true);
+                self.toast(error.to_string(), true);
                 return;
             }
         };
@@ -882,7 +858,7 @@ impl Workspace {
         match self.command("worktree.new", args).await {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
-                create.error = Some(describe(&*error));
+                create.error = Some(error.to_string());
                 self.overlay = Some(Overlay::WorktreeCreate(create));
             }
         }
@@ -902,7 +878,7 @@ impl Workspace {
         {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
-                open.error = Some(describe(&*error));
+                open.error = Some(error.to_string());
                 self.overlay = Some(Overlay::WorktreeOpen(open));
             }
         }
@@ -916,7 +892,7 @@ impl Workspace {
             None => match self.command("worktree.remove", args.clone()).await {
                 Ok(review) => review,
                 Err(error) => {
-                    remove.error = Some(describe(&*error));
+                    remove.error = Some(error.to_string());
                     self.overlay = Some(Overlay::WorktreeRemove(remove));
                     return;
                 }
@@ -929,7 +905,7 @@ impl Workspace {
             Ok(_) => self.invalidate_git(),
             Err(error) => {
                 remove.review = None;
-                remove.error = Some(describe(&*error));
+                remove.error = Some(error.to_string());
                 self.overlay = Some(Overlay::WorktreeRemove(remove));
             }
         }

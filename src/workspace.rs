@@ -156,7 +156,7 @@ impl Workspace {
                     Ok(WriteOutcome::Written) => return None,
                     Ok(WriteOutcome::Conflict) => "workspace changed during recovery".into(),
                     Ok(WriteOutcome::Unavailable(error)) => error.clone(),
-                    Err(error) => describe(error),
+                    Err(error) => error.to_string(),
                 };
                 Some(format!("{}: {error}", outcome.terminal))
             })
@@ -429,7 +429,7 @@ impl Workspace {
                             surface.ended = true;
                             surface.error = None;
                         }
-                        Err(error) => surface.error = Some(describe(&error)),
+                        Err(error) => surface.error = Some(error.to_string()),
                     }
                     continue;
                 }
@@ -441,7 +441,7 @@ impl Workspace {
                         surface.error = None;
                         surface.wanted = wanted;
                     }
-                    Err(error) => {surface.error = Some(describe(&error));continue;}
+                    Err(error) => {surface.error = Some(error.to_string());continue;}
                 }
             }
             if surface.wanted != wanted || activate {
@@ -466,7 +466,7 @@ impl Workspace {
         match self.command(command, args).await {
             Ok(value) => Some(value),
             Err(error) => {
-                self.toast(describe(&*error), true);
+                self.toast(error.to_string(), true);
                 None
             }
         }
@@ -578,21 +578,6 @@ impl Workspace {
         }
         self.keys = Keymap::new(&self.preferences.keys);
         Ok(())
-    }
-}
-
-/// A person-facing sentence for an error, without the library's variant wrapper.
-fn describe(error: &(dyn std::error::Error + 'static)) -> String {
-    use herdr_client_lib::client::Error as Core;
-    match error.downcast_ref::<Core>() {
-        Some(Core::Io(text) | Core::Protocol(text)) => text.clone(),
-        Some(Core::Rpc(value)) => value["message"]
-            .as_str()
-            .map_or_else(|| value.to_string(), str::to_owned),
-        Some(Core::Timeout) => "core did not answer in time".into(),
-        Some(Core::Disconnected) => "disconnected from core".into(),
-        Some(Core::SlowConsumer) => "terminal output fell behind".into(),
-        None => error.to_string(),
     }
 }
 
@@ -1001,7 +986,7 @@ pub async fn run(
                                 app.reconcile();
                             }
                         }
-                        Err(error) => app.toast(describe(&*error), true),
+                        Err(error) => app.toast(error.to_string(), true),
                     }
                 }
                 if !connected {

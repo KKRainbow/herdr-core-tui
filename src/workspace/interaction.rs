@@ -305,20 +305,9 @@ impl Workspace {
                     && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
                 {
                     match hit {
-                        Hit::Space(id) => {
+                        Hit::Space(id) | Hit::Tab(id) => {
                             if let Some(doc) = self.document()
-                                && let Some(pane) = doc
-                                    .node(&id)
-                                    .and_then(|s| s["tabs"].as_array())
-                                    .and_then(|t| t.iter().find_map(|t| layout::first(&t["root"])))
-                            {
-                                self.focus(pane);
-                            }
-                        }
-                        Hit::Tab(id) => {
-                            if let Some(doc) = self.document()
-                                && let Some(pane) =
-                                    doc.node(&id).and_then(|t| layout::first(&t["root"]))
+                                && let Some(pane) = remembered_pane(&self.view(), &doc, &id)
                             {
                                 self.focus(pane);
                             }

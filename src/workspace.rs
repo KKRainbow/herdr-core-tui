@@ -341,12 +341,8 @@ impl Workspace {
             let node = doc.node(id).ok_or("Target unavailable")?;
             let pane = if command == "pane.focus" {
                 Some(id)
-            } else if command == "tab.focus" {
-                layout::first(&node["root"])
             } else {
-                node["tabs"]
-                    .as_array()
-                    .and_then(|t| t.iter().find_map(|t| layout::first(&t["root"])))
+                remembered_pane(&self.view(), &doc, id).or_else(|| layout::first(&node["root"]))
             }
             .ok_or("Target has no pane")?;
             self.focus(pane);
@@ -471,8 +467,8 @@ impl Workspace {
                         .unwrap_or(0);
                     if let Some(id) = spaces
                         .get((index + 1) % spaces.len().max(1))
-                        .and_then(|s| s["tabs"].as_array())
-                        .and_then(|t| t.iter().find_map(|t| layout::first(&t["root"])))
+                        .and_then(|s| s["id"].as_str())
+                        .and_then(|id| remembered_pane(&view, &doc, id))
                     {
                         self.focus(id);
                     }
@@ -540,7 +536,8 @@ impl Workspace {
                         .unwrap_or(0);
                     if let Some(id) = tabs
                         .get((index + 1) % tabs.len().max(1))
-                        .and_then(|t| layout::first(&t["root"]))
+                        .and_then(|t| t["id"].as_str())
+                        .and_then(|id| remembered_pane(&view, &doc, id))
                     {
                         self.focus(id);
                     }
@@ -607,6 +604,28 @@ impl Workspace {
         self.reconcile();
     }
 }
+fn remembered_pane<'a>(
+    view: &View,
+    doc: &'a herdr_client_lib::document::Document,
+    target: &str,
+) -> Option<&'a str> {
+    for id in view.focused.iter().chain(view.history.iter().rev()) {
+        if doc
+            .location(id)
+            .is_some_and(|(space, tab)| space == target || tab == target)
+        {
+            return doc.node(id).and_then(|n| n["id"].as_str());
+        }
+    }
+    let node = doc.node(target)?;
+    layout::first(&node["root"]).or_else(|| {
+        node["tabs"]
+            .as_array()?
+            .iter()
+            .find_map(|t| layout::first(&t["root"]))
+    })
+}
+
 fn agent_pane(node: &Value, address: &str, machine: &str) -> Option<String> {
     if node["type"] == "block"
         && node["content"]["terminal"]
@@ -917,6 +936,33 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_restores_tab_and_space_focus() {
+        use herdr_client_lib::document::{Document, terminal_pane};
+        let mut doc = Document::default();
+        for space in ["s1", "s2"] {
+            doc.create_space(space, "", "").unwrap();
+        }
+        for (space, tab, pane) in [("s1", "t1", "a"), ("s1", "t2", "b"), ("s2", "t3", "c")] {
+            doc.create_tab(space, tab, "", terminal_pane(pane, pane))
+                .unwrap();
+        }
+        doc.split(
+            "b",
+            "split",
+            herdr_client_lib::document::Axis::Row,
+            terminal_pane("d", "d"),
+        )
+        .unwrap();
+        let mut view = View::default();
+        for id in ["a", "d", "c"] {
+            view.focus(&doc, id);
+        }
+        assert_eq!(remembered_pane(&view, &doc, "s1"), Some("d"));
+        assert_eq!(remembered_pane(&view, &doc, "t2"), Some("d"));
+        doc.remove("d").unwrap();
+        assert_eq!(remembered_pane(&view, &doc, "t2"), Some("b"));
+    }
     #[test]
     fn agent_target_resolves_only_placed_terminal() {
         let doc = json!({"spaces":[{"tabs":[{"root":{"type":"row","children":[

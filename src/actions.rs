@@ -70,7 +70,7 @@ fn focus_created(view: &mut View, document: &herdr_client_lib::document::Documen
         view.zoom(None);
     }
 }
-pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
+pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight | id, next, share\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
 
 /// Moves spaces together, in the given order, to just before `before` (or to the end).
 fn move_spaces(
@@ -191,6 +191,14 @@ pub async fn execute(
     }
     if command == "pane.resize" {
         let id = target(&args, view, "pane")?;
+        if let Some(next) = text(&args, "next") {
+            let share = args["share"].as_f64().ok_or("share is required")?;
+            return written(
+                session
+                    .edit(machine, |d| d.resize_between(&id, next, share))
+                    .await?,
+            );
+        }
         let weight = args["weight"].as_f64().ok_or("weight is required")?;
         return written(session.edit(machine, |d| d.resize(&id, weight)).await?);
     }
@@ -226,15 +234,21 @@ pub async fn execute(
             tab: id("tb"),
             pane: pane.clone(),
         }),
-        "tab.new" | "terminal.keep" => Some(Placement::Tab {
-            space: text(&args, "space")
+        "tab.new" | "terminal.keep" => {
+            let space = text(&args, "space")
                 .map(str::to_owned)
                 .or_else(|| view.active_space.clone())
-                .ok_or("Select a space first")?,
-            id: id("tb"),
-            name: text(&args, "name").unwrap_or("").into(),
-            pane: pane.clone(),
-        }),
+                .ok_or("Select a space first")?;
+            // New tabs go after the viewer's selected tab in that space, as in the app.
+            let after = view.spaces.get(&space).cloned();
+            Some(Placement::Tab {
+                space,
+                after,
+                id: id("tb"),
+                name: text(&args, "name").unwrap_or("").into(),
+                pane: pane.clone(),
+            })
+        }
         "pane.split" => {
             let target = target(&args, view, "pane")?;
             let (space, tab) = document
@@ -414,6 +428,7 @@ mod tests {
         );
         let tab = Placement::Tab {
             space: "s".into(),
+            after: None,
             id: "t2".into(),
             name: "".into(),
             pane: "b".into(),

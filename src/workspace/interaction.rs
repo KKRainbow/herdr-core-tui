@@ -1502,9 +1502,12 @@ impl Workspace {
             .filter(|s| s.vertical == vertical)
             .find(edge)
         {
-            let weight = splitter.resized_weight(delta);
-            self.run("pane.resize", json!({"id":splitter.id,"weight":weight}))
-                .await;
+            let share = splitter.resized_share(delta);
+            self.run(
+                "pane.resize",
+                json!({"id":splitter.id,"next":splitter.next,"share":share}),
+            )
+            .await;
         }
     }
 
@@ -1728,7 +1731,7 @@ impl Workspace {
                 } else if let Some(splitter) = self.splitter_at(x, y) {
                     self.drag = Some(Drag::Splitter(ResizeDrag {
                         origin: if splitter.vertical { y } else { x },
-                        value: splitter.weight,
+                        value: splitter.resized_share(0),
                         splitter,
                     }));
                 } else {
@@ -2154,11 +2157,11 @@ impl Workspace {
                 let position = if resize.splitter.vertical { y } else { x };
                 resize.value = resize
                     .splitter
-                    .resized_weight(i32::from(position) - i32::from(resize.origin));
+                    .resized_share(i32::from(position) - i32::from(resize.origin));
                 if released {
                     self.run(
                         "pane.resize",
-                        json!({"id":resize.splitter.id,"weight":resize.value}),
+                        json!({"id":resize.splitter.id,"next":resize.splitter.next,"share":resize.value}),
                     )
                     .await;
                 } else {

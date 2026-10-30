@@ -38,20 +38,22 @@ pub fn first(node: &Value) -> Option<&str> {
         node["children"].as_array()?.iter().find_map(first)
     }
 }
+/// The divider between a child and the next one.
 pub struct Splitter {
     pub id: String,
+    pub next: String,
     pub vertical: bool,
     pub area: Rect,
     pub extent: u16,
-    pub total: u16,
-    pub other_weight: f64,
-    pub weight: f64,
+    pub next_extent: u16,
 }
 impl Splitter {
-    pub fn resized_weight(&self, delta: i32) -> f64 {
-        let extent = (i32::from(self.extent) + delta).clamp(1, i32::from(self.total).max(2) - 1);
-        (self.other_weight * f64::from(extent) / f64::from(i32::from(self.total) - extent))
-            .max(0.05)
+    /// The child's share of the pair after moving the divider by `delta` cells.
+    /// The pair keeps its combined weight, as the app's divider drag does.
+    pub fn resized_share(&self, delta: i32) -> f64 {
+        let pair = (i32::from(self.extent) + i32::from(self.next_extent)).max(2);
+        let extent = (i32::from(self.extent) + delta).clamp(1, pair - 1);
+        f64::from(extent) / f64::from(pair)
     }
 }
 pub fn splitters(root: &Value, area: Rect, focused: Option<&str>) -> Vec<Splitter> {
@@ -115,15 +117,20 @@ fn collect(
         })
         .collect();
     let sum: f64 = weights.iter().sum();
-    let mut consumed = 0;
     let mut cumulative = 0.;
+    let ends: Vec<u16> = (0..children.len())
+        .map(|index| {
+            cumulative += weights[index];
+            if index + 1 == children.len() {
+                total
+            } else {
+                ((cumulative / sum) * f64::from(total)).round() as u16
+            }
+        })
+        .collect();
+    let mut consumed = 0;
     for (index, child) in children.iter().enumerate() {
-        cumulative += weights[index];
-        let end = if index + 1 == children.len() {
-            total
-        } else {
-            ((cumulative / sum) * f64::from(total)).round() as u16
-        };
+        let end = ends[index];
         let child_area = if vertical {
             Rect::new(
                 area.x,
@@ -142,6 +149,7 @@ fn collect(
         if index + 1 < children.len() {
             splitters.push(Splitter {
                 id: child["id"].as_str().unwrap_or("").into(),
+                next: children[index + 1]["id"].as_str().unwrap_or("").into(),
                 vertical,
                 area: if vertical {
                     Rect::new(
@@ -159,9 +167,7 @@ fn collect(
                     )
                 },
                 extent: end.saturating_sub(consumed),
-                total,
-                other_weight: sum - weights[index],
-                weight: weights[index],
+                next_extent: ends[index + 1].saturating_sub(end),
             });
         }
         collect(child, child_area, focused, result, splitters);
@@ -181,11 +187,13 @@ mod tests {
         assert_eq!(dividers[0].id, "col");
         assert!(!dividers[0].vertical);
         assert_eq!(dividers[0].area, Rect::new(49, 0, 1, 40));
-        assert!((dividers[0].resized_weight(10) - 1.5).abs() < 0.001);
+        assert_eq!(dividers[0].next, "c");
+        assert!((dividers[0].resized_share(10) - 0.6).abs() < 0.001);
         assert_eq!(dividers[1].id, "a");
         assert!(dividers[1].vertical);
         assert_eq!(dividers[1].area, Rect::new(0, 19, 50, 1));
-        assert!((dividers[1].resized_weight(10) - 3.0).abs() < 0.001);
+        assert!((dividers[1].resized_share(10) - 0.75).abs() < 0.001);
+        assert!((dividers[1].resized_share(100) - 39. / 40.).abs() < 0.001);
     }
     #[test]
     fn weighted_layout_and_private_stack_focus() {

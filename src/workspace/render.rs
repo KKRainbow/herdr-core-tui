@@ -4,6 +4,7 @@ impl Workspace {
         &mut self,
         screen: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> io::Result<()> {
+        self.renders += 1;
         let view = self.view();
         let doc = self.document();
         let sidebar = self.preferences.sidebar_width;
@@ -152,7 +153,11 @@ impl Workspace {
         }
         if self.panes.is_empty() {
             frame.render_widget(
-                Paragraph::new("Ctrl+B s: new space   Ctrl+B ?: help"),
+                Paragraph::new(if doc.is_none() {
+                    "Workspace unavailable; waiting for its machine"
+                } else {
+                    "Ctrl+B s: new space   Ctrl+B ?: help"
+                }),
                 Rect::new(width + 1, 2, area.width.saturating_sub(width + 1), 1),
             );
         }

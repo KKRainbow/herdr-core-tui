@@ -35,6 +35,7 @@ use std::{
 };
 const TIME: Duration = Duration::from_secs(5);
 struct Surface {
+    ended: bool,
     retry_at: std::time::Instant,
     address: String,
     stream: Option<Stream>,
@@ -58,6 +59,9 @@ struct ResizeDrag {
     value: f64,
 }
 pub struct Workspace {
+    identities: BTreeMap<String, String>,
+    renders: u64,
+    parsed_bytes: u64,
     attention: herdr_client_lib::view::Attention,
     drag: Option<ResizeDrag>,
     pub session: Session,
@@ -75,7 +79,50 @@ pub struct Workspace {
 }
 impl Workspace {
     fn view(&self) -> View {
-        self.views.get(&self.machine).cloned().unwrap_or_default()
+        self.views.get(&self.view_id()).cloned().unwrap_or_default()
+    }
+    fn view_id(&self) -> String {
+        self.identities
+            .get(&self.machine)
+            .cloned()
+            .unwrap_or_else(|| format!("unavailable:{}", self.machine))
+    }
+    fn view_mut(&mut self) -> &mut View {
+        let id = self.view_id();
+        self.views.entry(id).or_default()
+    }
+    async fn refresh_identities(&mut self) -> Result<bool> {
+        let machines = self
+            .session
+            .client
+            .call("machine.list", json!({}), TIME)
+            .await?;
+        let identities = identities(&self.session.client, &machines);
+        let mut changed = self.identities != identities;
+        self.identities = identities;
+        for name in self
+            .session
+            .documents
+            .keys()
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            let connected = machines["machines"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|record| record["name"] == name && record["state"] == "connected");
+            let slot = self.session.documents.get_mut(&name).unwrap();
+            if !connected {
+                changed |= slot.document.take().is_some();
+                slot.error = Some("Remote machine unavailable".into());
+            } else if slot.document.is_none() {
+                self.session.refresh(&name).await;
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
     fn document(&self) -> Option<herdr_client_lib::document::Document> {
         self.session.document(&self.machine).ok()
@@ -97,7 +144,7 @@ impl Workspace {
         }
 
         if let Some(doc) = self.document() {
-            let view = self.views.entry(self.machine.clone()).or_default();
+            let view = self.view_mut();
             view.reconcile(&doc);
             if view.focused.is_none()
                 && let Some(pane) = doc.value()["spaces"].as_array().and_then(|s| {
@@ -114,11 +161,8 @@ impl Workspace {
     }
     fn focus(&mut self, id: &str) {
         if let Some(doc) = self.document() {
-            self.views
-                .entry(self.machine.clone())
-                .or_default()
-                .focus(&doc, id);
-            if let Some(view) = self.views.get_mut(&self.machine)
+            self.view_mut().focus(&doc, id);
+            if let Some(view) = self.views.get_mut(&self.view_id())
                 && view.zoomed.is_some()
             {
                 view.zoomed = view.focused.clone();
@@ -153,7 +197,7 @@ impl Workspace {
             self.panes = layout::panes(root, body, view.focused.as_deref(), view.zoomed.as_deref());
         }
     }
-    async fn sync_surfaces(&mut self) -> Result<()> {
+    async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
         let visible: Vec<_> = self
             .panes
             .iter()
@@ -163,6 +207,7 @@ impl Workspace {
         for (id, surface) in &mut self.surfaces {
             if !visible.contains(id) {
                 surface.stream = None;
+                surface.retry_at = std::time::Instant::now();
             }
         }
         if self.surfaces.len() > 32 {
@@ -186,6 +231,7 @@ impl Workspace {
                 .surfaces
                 .entry(pane.id.clone())
                 .or_insert_with(|| Surface {
+                    ended: false,
                     retry_at: std::time::Instant::now(),
                     address: address.clone(),
                     stream: None,
@@ -196,20 +242,57 @@ impl Workspace {
                 });
             if surface.address != address {
                 surface.address = address.clone();
+                surface.ended = false;
                 surface.stream = None;
                 surface.copy = None;
             }
             if surface.stream.is_none() {
+                if surface.ended {
+                    continue;
+                }
                 if std::time::Instant::now() < surface.retry_at {
                     continue;
                 }
                 surface.retry_at = std::time::Instant::now() + Duration::from_secs(2);
+                let finished =
+                    self.session.terminals.values().any(|record| {
+                        record["address"] == address && record["state"] == "finished"
+                    });
+                if finished {
+                    match self
+                        .session
+                        .client
+                        .call("terminal.read", json!({"terminal":address}), TIME)
+                        .await
+                    {
+                        Ok(result) => {
+                            surface.vt = Vt::new(wanted.0, wanted.1);
+                            surface.vt.write(
+                                result["text"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .replace('\n', "\r\n")
+                                    .as_bytes(),
+                            );
+                            surface.ended = true;
+                            surface.error = None;
+                        }
+                        Err(error) => surface.error = Some(error.to_string()),
+                    }
+                    continue;
+                }
                 match self.session.client.attach(json!({"terminal":address,"cols":wanted.0,"rows":wanted.1,"resumed":true,"history":1000}),TIME).await {
- Ok((result,stream))=>{let size=size(&result["terminal"],wanted);surface.vt=Vt::new(size.0,size.1);surface.stream=Some(stream);surface.error=None;surface.wanted=wanted;}
- Err(e)=>{surface.error=Some(e.to_string());continue;}
- }
+                    Ok((result, stream)) => {
+                        let size = size(&result["terminal"],wanted);
+                        surface.vt = Vt::new(size.0,size.1);
+                        surface.stream = Some(stream);
+                        surface.error = None;
+                        surface.wanted = wanted;
+                    }
+                    Err(error) => {surface.error = Some(error.to_string());continue;}
+                }
             }
-            if surface.wanted != wanted {
+            if surface.wanted != wanted || activate {
                 surface.wanted = wanted;
                 if self.focused
                     && let Some(stream) = &surface.stream
@@ -290,7 +373,7 @@ impl Workspace {
             args.clone(),
         )
         .await?;
-        self.views.insert(self.machine.clone(), view);
+        self.views.insert(self.view_id(), view);
         self.reconcile();
         if result.get("confirmation").is_some() {
             let mut args = args;
@@ -322,7 +405,7 @@ impl Workspace {
                 )))
             }
             "zoom" => {
-                let view = self.views.entry(self.machine.clone()).or_default();
+                let view = self.view_mut();
                 view.zoomed = if view.zoomed.is_some() {
                     None
                 } else {
@@ -477,7 +560,11 @@ impl Workspace {
                         let size = size(&event["data"], surface.wanted);
                         surface.vt.resize(size.0, size.1);
                     }
-                    Some("restarted" | "lost") => surface.stream = None,
+                    Some("restarted" | "lost") => {
+                        surface.stream = None;
+                        surface.ended = false;
+                    }
+                    Some("finished") => surface.ended = true,
                     _ => {}
                 }
             } else if value["method"] == "missed" {
@@ -486,6 +573,21 @@ impl Workspace {
         }
         self.reconcile();
     }
+}
+fn identities(
+    client: &herdr_client_lib::client::Client,
+    machines: &Value,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    if let Some(id) = client.capabilities()["core"]["id"].as_str() {
+        result.insert(String::new(), id.into());
+    }
+    for record in machines["machines"].as_array().into_iter().flatten() {
+        if let (Some(name), Some(id)) = (record["name"].as_str(), record["id"].as_str()) {
+            result.insert(name.into(), id.into());
+        }
+    }
+    result
 }
 fn inner(area: Rect) -> Rect {
     Rect::new(
@@ -542,8 +644,12 @@ pub async fn run(
             .flatten()
             .filter_map(|m| m["name"].as_str().map(str::to_owned)),
     );
+    let identities = identities(&client, &machine_list);
     let session = Session::connect(client, machines, TIME).await?;
     let mut app = Workspace {
+        identities,
+        renders: 0,
+        parsed_bytes: 0,
         attention: Default::default(),
         drag: None,
         session,
@@ -573,24 +679,31 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut interrupt = Box::pin(tokio::signal::ctrl_c());
     let mut dirty = true;
+    let mut activate_layout = true;
+    let mut render_due = true;
+    let mut redraw = tokio::time::interval(Duration::from_millis(16));
+    redraw.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut connected = true;
     let mut retry = tokio::time::interval(Duration::from_secs(2));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        if dirty {
+        if dirty && render_due {
             let area = screen.size()?;
             app.geometry(Rect::new(0, 0, area.width, area.height));
-            if connected && let Err(e) = app.sync_surfaces().await {
+            if connected && let Err(e) = app.sync_surfaces(activate_layout).await {
                 app.notice = e.to_string();
             }
+            activate_layout = false;
             app.draw(&mut screen)?;
             dirty = false;
+            render_due = false;
         }
         enum Next {
             Host(Option<io::Result<Event>>),
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
             Update(std::result::Result<Value, Error>),
             Retry,
+            Paint,
             Control(crate::control::Request),
         }
         let next = tokio::select! {
@@ -600,13 +713,15 @@ pub async fn run(
         output=next_output(&mut app.surfaces)=>Next::Output(output.0,output.1),
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
+        _=redraw.tick(),if dirty=>Next::Paint,
         };
         match next {
+            Next::Paint => render_due = true,
             Next::Control(request) => {
                 let quit = request.command == "quit";
                 let result = if request.command == "state" {
                     Ok(
-                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
+                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.document().is_some(),"metrics":{"renders":app.renders,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
                     )
                 } else if quit {
                     Ok(json!({"ok":true}))
@@ -627,7 +742,8 @@ pub async fn run(
                     Ok(value) => value,
                     Err(e) => json!({"error":e.to_string()}),
                 });
-                dirty = true;
+                dirty |= request.command != "state";
+                activate_layout |= request.command != "state";
                 if quit {
                     let _ = tokio::time::timeout(Duration::from_secs(2), request.delivered).await;
                     break;
@@ -638,6 +754,7 @@ pub async fn run(
                     break;
                 };
                 let old = app.active_id();
+                activate_layout |= matches!(event, Event::FocusGained | Event::Resize(_, _));
                 let activate =
                     matches!(event, Event::Mouse(_) | Event::Key(_) | Event::FocusGained);
                 match app.host(event).await {
@@ -647,7 +764,7 @@ pub async fn run(
                 }
                 if old != app.active_id() && activate {
                     app.geometry(Rect::new(0, 0, screen.size()?.width, screen.size()?.height));
-                    if let Err(e) = app.sync_surfaces().await {
+                    if let Err(e) = app.sync_surfaces(true).await {
                         app.notice = e.to_string();
                     }
                     if let Err(e) = app.activate().await {
@@ -658,6 +775,7 @@ pub async fn run(
             }
             Next::Output(id, Ok(Some(StreamEvent::Data(bytes)))) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {
+                    app.parsed_bytes += bytes.len() as u64;
                     surface.vt.write(&bytes);
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
@@ -668,16 +786,31 @@ pub async fn run(
                 }
                 dirty = true;
             }
-            Next::Output(id, _) => {
+            Next::Output(id, outcome) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     surface.stream = None;
-                    surface.error = Some("Terminal stream ended; waiting for core".into());
+                    surface.ended |= matches!(outcome, Ok(Some(StreamEvent::Closed(ref value))) if value["reason"] == "exited");
+                    surface.error = Some(
+                        if surface.ended {
+                            "Terminal finished"
+                        } else {
+                            "Terminal stream ended; waiting for core"
+                        }
+                        .into(),
+                    );
                 }
                 dirty = true;
             }
             Next::Update(Ok(value)) => {
-                app.notification(&value);
-                dirty = true;
+                if value["method"] == "missed"
+                    && let Err(e) = app.refresh_identities().await
+                {
+                    app.notice = e.to_string();
+                }
+                if value["method"] != "heartbeat" {
+                    app.notification(&value);
+                    dirty = true;
+                }
             }
             Next::Update(Err(e)) => {
                 app.notice = format!("Disconnected: {e}; reconnecting");
@@ -688,11 +821,25 @@ pub async fn run(
                 dirty = true;
             }
             Next::Retry => {
+                if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
+                    match app.refresh_identities().await {
+                        Ok(changed) => {
+                            dirty |= changed;
+                            if changed {
+                                app.reconcile();
+                            }
+                        }
+                        Err(error) => app.notice = error.to_string(),
+                    }
+                }
                 if !connected {
                     match config.connect(TIME).await {
                         Ok(client) => match app.session.reconnect(client).await {
                             Ok(()) => {
                                 connected = true;
+                                if let Err(e) = app.refresh_identities().await {
+                                    app.notice = e.to_string();
+                                }
                                 app.notice = "Reconnected".into();
                                 app.reconcile();
                                 dirty = true;
@@ -701,7 +848,11 @@ pub async fn run(
                         },
                         Err(e) => app.notice = e.to_string(),
                     }
-                } else if app.surfaces.values().any(|s| s.stream.is_none()) {
+                } else if app.panes.iter().any(|p| {
+                    app.surfaces
+                        .get(&p.id)
+                        .is_some_and(|s| s.stream.is_none() && !s.ended)
+                }) {
                     dirty = true;
                 }
             }

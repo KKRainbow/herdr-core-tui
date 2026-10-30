@@ -80,7 +80,8 @@ Kitty graphics use clipped half-block rendering, including decoded PNG images.
 Virtual image placements and pixel-perfect graphics are not supported.
 Scrollback is bounded to 10,000 lines and 10 MB per cached terminal; image storage is bounded to 16 MB.
 The workspace keeps at most 32 hidden terminal caches and detaches hidden streams.
-Linux is the validated platform; native macOS and Windows checks are pending.
+Linux is the supported platform for this release.
+Native macOS is unvalidated; Windows also needs a native local control transport.
 
 ## Checks
 
@@ -89,7 +90,10 @@ Linux is the validated platform; native macOS and Windows checks are pending.
 `just workflows-integration` requires `HC_TUI_TEST_ROOT` under `/tmp` for Git and workspace workflows.
 `just app-integration` requires an isolated running app fixture, `TUI_APP_TEST_ROOT`, `TUI_APP_TEST_TERMINAL`, and `HC_SESSION`.
 Do not point integration tests at live work.
-See [validation](docs/validation.md) and [provenance](docs/provenance.md).
+`just remote-integration`, `just geometry-integration`, and `just compatibility-integration` use new scratch cores.
+`just cli-integration` verifies headless operations and multiple live instances.
+`just profile` measures one and fifteen output-producing panes.
+See [validation](docs/validation.md), [performance](docs/performance.md), and [provenance](docs/provenance.md).
 
 ## CLI and packaging
 

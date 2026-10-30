@@ -13,8 +13,13 @@ def wait(marker):
  assert marker in output,output[-2000:]
 try:
  wait(b"blocked")
- os.write(master,b'\x02a')
- wait(b"DETACHED_AGENT")
+ output=b"";end=time.monotonic()+10
+ while b"DETACHED_AGENT"not in output and time.monotonic()<end:
+  os.write(master,b'\x02a')
+  tick=time.monotonic()+.3
+  while time.monotonic()<tick:
+   if select.select([master],[],[],.05)[0]:output+=os.read(master,65536)
+ assert b"DETACHED_AGENT"in output,output[-2000:]
  os.write(master,b'\x11');assert p.wait(timeout=5)==0
  print("PASS: reported status and keyboard navigation for an agent without a pane")
 finally:

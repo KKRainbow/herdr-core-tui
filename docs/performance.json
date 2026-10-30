@@ -1,0 +1,68 @@
+[
+  {
+    "panes": 1,
+    "phase": "idle",
+    "seconds": 5.06,
+    "cpu_percent": 0.0,
+    "rss_mib": 6.67,
+    "renders": 0,
+    "parsed_bytes": 0,
+    "attached": 1,
+    "rpc_p95_ms": 1.95
+  },
+  {
+    "panes": 1,
+    "phase": "visible",
+    "seconds": 5.06,
+    "cpu_percent": 10.67,
+    "rss_mib": 7.25,
+    "renders": 251,
+    "parsed_bytes": 19829,
+    "attached": 1,
+    "rpc_p95_ms": 2.04
+  },
+  {
+    "panes": 1,
+    "phase": "hidden",
+    "seconds": 5.06,
+    "cpu_percent": 0.0,
+    "rss_mib": 7.64,
+    "renders": 0,
+    "parsed_bytes": 0,
+    "attached": 1,
+    "rpc_p95_ms": 1.86
+  },
+  {
+    "panes": 15,
+    "phase": "idle",
+    "seconds": 5.04,
+    "cpu_percent": 0.0,
+    "rss_mib": 7.49,
+    "renders": 0,
+    "parsed_bytes": 0,
+    "attached": 15,
+    "rpc_p95_ms": 4.52
+  },
+  {
+    "panes": 15,
+    "phase": "visible",
+    "seconds": 5.01,
+    "cpu_percent": 17.55,
+    "rss_mib": 10.4,
+    "renders": 313,
+    "parsed_bytes": 294433,
+    "attached": 15,
+    "rpc_p95_ms": 3.67
+  },
+  {
+    "panes": 15,
+    "phase": "hidden",
+    "seconds": 5.04,
+    "cpu_percent": 0.0,
+    "rss_mib": 13.63,
+    "renders": 0,
+    "parsed_bytes": 0,
+    "attached": 1,
+    "rpc_p95_ms": 4.42
+  }
+]

@@ -41,3 +41,15 @@ msrv:
 
 notices:
     python3 scripts/notices.py
+
+remote-integration: release
+    python3 tests/remote.py
+
+geometry-integration: release
+    python3 tests/geometry.py
+
+profile: release
+    python3 tests/performance.py
+
+compatibility-integration: release
+    python3 tests/compatibility.py

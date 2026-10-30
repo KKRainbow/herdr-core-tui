@@ -134,7 +134,9 @@ async fn run() -> Result<()> {
         };
         enum Next {
             Output(std::result::Result<Option<StreamEvent>, herdr_client_lib::client::Error>),
-            Notification(std::result::Result<Option<StreamEvent>, herdr_client_lib::client::Error>),
+            Notification(
+                std::result::Result<Option<serde_json::Value>, herdr_client_lib::client::Error>,
+            ),
             Host(Option<io::Result<Event>>),
             Retry,
         }

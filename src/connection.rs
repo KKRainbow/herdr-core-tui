@@ -1,5 +1,5 @@
 use herdr_client_lib::{
-    client::{Client, Error, Stream, StreamEvent},
+    client::{Client, Error, Notifications, Stream},
     transport::HcConfig,
 };
 use serde_json::{Value, json};
@@ -8,7 +8,7 @@ const DEADLINE: Duration = Duration::from_secs(3);
 
 pub struct Connection {
     pub client: Client,
-    pub events: Stream,
+    pub events: Notifications,
     pub stream: Option<Stream>,
     pub address: String,
     pub record: Value,
@@ -27,7 +27,7 @@ impl Connection {
         let address = record["address"].as_str().unwrap_or(target).to_owned();
         Ok(Self {
             client,
-            events,
+            events: Notifications::new(events),
             stream: Some(stream),
             address,
             record,
@@ -39,13 +39,7 @@ impl Connection {
         self.stream = Some(stream);
         Ok(())
     }
-    pub async fn notification(&mut self, event: StreamEvent) -> Result<bool, Error> {
-        let StreamEvent::Data(bytes) = event else {
-            return Err(Error::Disconnected);
-        };
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|e| Error::Protocol(e.to_string()))?;
-        self.events.consumed(bytes.len() as u32).await?;
+    pub async fn notification(&mut self, value: Value) -> Result<bool, Error> {
         if value["method"] == "missed" {
             if let Some(record) = value["params"]["terminals"]
                 .as_array()

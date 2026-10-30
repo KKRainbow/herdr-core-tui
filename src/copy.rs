@@ -63,18 +63,25 @@ impl Copy {
         for offset in 1..=self.frame.rows.len() {
             let y = (self.cursor.1 as usize + offset) % self.frame.rows.len();
             let row = &self.frame.rows[y];
-            let line = row.iter().map(|c| c.text.as_str()).collect::<String>();
+            let mut line = String::new();
+            let mut columns = Vec::new();
+            let mut tail = false;
+            for (x, cell) in row.iter().enumerate() {
+                if tail {
+                    tail = false;
+                    continue;
+                }
+                tail = cell.wide;
+                let text = if cell.text.is_empty() {
+                    " "
+                } else {
+                    &cell.text
+                };
+                columns.extend(std::iter::repeat_n(x as u16, text.len()));
+                line.push_str(text);
+            }
             if let Some(index) = line.find(query) {
-                let mut bytes = 0;
-                let x = row
-                    .iter()
-                    .position(|c| {
-                        let found = bytes >= index;
-                        bytes += c.text.len();
-                        found
-                    })
-                    .unwrap_or(0);
-                self.cursor = (x as u16, y as u16);
+                self.cursor = (columns[index], y as u16);
                 return true;
             }
         }
@@ -146,6 +153,7 @@ mod tests {
         let mut vt = Vt::new(20, 3);
         vt.write("界 needle\r\n1\r\n2\r\n3\r\n4".as_bytes());
         let mut copy = search_history(&mut vt, "needle").unwrap();
+        assert_eq!(copy.cursor, (3, 0));
         copy.selecting = true;
         copy.anchor = (0, 0);
         copy.cursor = (8, 0);
@@ -161,6 +169,11 @@ mod tests {
         assert_eq!(c.text(), "hello");
         assert!(c.search("world"));
         assert_eq!(c.cursor, (0, 1));
+        let mut spaced = Vt::new(20, 3);
+        spaced.write(b"a\x1b[3Cb");
+        let mut search = Copy::new(spaced.frame());
+        assert!(search.search("a   b"));
+        assert!(!search.search("ab"));
         vt.write(b"changed");
         assert_eq!(c.frame.rows[0][0].text, "h");
     }

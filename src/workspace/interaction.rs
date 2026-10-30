@@ -246,6 +246,20 @@ impl Workspace {
                 self.activate().await?;
             }
             Event::Mouse(mut mouse) => {
+                if mouse.modifiers.contains(KeyModifiers::ALT)
+                    && matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    )
+                {
+                    let action = if mouse.kind == MouseEventKind::ScrollUp {
+                        "pane.previous"
+                    } else {
+                        "pane.next"
+                    };
+                    self.action(action).await?;
+                    return Ok(false);
+                }
                 if let Some(drag) = &mut self.drag {
                     if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
                         let position = if drag.splitter.vertical {

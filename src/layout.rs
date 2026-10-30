@@ -208,3 +208,30 @@ mod tests {
         );
     }
 }
+
+pub fn navigation_ids(root: &Value) -> Vec<String> {
+    if root["type"] == "block" {
+        return root["id"]
+            .as_str()
+            .map(|id| vec![id.into()])
+            .unwrap_or_default();
+    }
+    root["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(navigation_ids)
+        .collect()
+}
+
+#[test]
+fn navigation_includes_hidden_stack_children() {
+    let root = serde_json::json!({"type":"stack","children":[
+        {"type":"block","id":"a"},{"type":"block","id":"b"}
+    ]});
+    assert_eq!(navigation_ids(&root), vec!["a", "b"]);
+    assert_eq!(
+        panes(&root, Rect::new(0, 0, 80, 24), Some("b"), None)[0].id,
+        "b"
+    );
+}

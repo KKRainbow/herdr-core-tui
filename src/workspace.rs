@@ -399,7 +399,7 @@ impl Workspace {
             "menu" => self.dialog = Some(Dialog::Menu { selected: 0 }),
             "help" => {
                 self.dialog = Some(Dialog::Message(format!(
-                    "Ctrl+B then:\ns: space   t: tab   %: horizontal split   \": vertical split\np: next pane   n: next tab   z: zoom   r: rename   x: close\n[: copy mode   :: command   w: new worktree\nCopy: arrows/hjkl move, Space anchors, y copies, / searches, n repeats, Esc exits.\nPageUp/PageDown scroll history. Shift+drag selects.\nClick spaces, tabs and agents to navigate.\nConfig: {}\n\n{}",
+                    "Ctrl+B then:\ns: space   t: tab   %: horizontal split   \": vertical split\np: next pane   n: next tab   z: zoom   r: rename   x: close\n[: copy mode   :: command   w: new worktree\nCopy: arrows/hjkl move, Space anchors, y copies, / searches, n repeats, Esc exits.\nPageUp/PageDown scroll history. Shift+drag selects.\nClick spaces, tabs and agents to navigate. Alt+wheel cycles all panes, including hidden stack panes.\nConfig: {}\n\n{}",
                     preferences::config_path().display(),
                     actions::HELP
                 )))
@@ -486,16 +486,24 @@ impl Workspace {
                     }
                 }
             }
-            "pane.next" => {
+            "pane.next" | "pane.previous" => {
                 let view = self.view();
-                let index = self
-                    .panes
-                    .iter()
-                    .position(|p| Some(&p.id) == view.focused.as_ref())
-                    .unwrap_or(0);
-                if let Some(pane) = self.panes.get((index + 1) % self.panes.len().max(1)) {
-                    let id = pane.id.clone();
-                    self.focus(&id);
+                if let Some(doc) = self.document()
+                    && let Some(tab) = view.active_tab.as_deref().and_then(|id| doc.node(id))
+                {
+                    let ids = layout::navigation_ids(&tab["root"]);
+                    if !ids.is_empty() {
+                        let index = ids
+                            .iter()
+                            .position(|id| Some(id) == view.focused.as_ref())
+                            .unwrap_or(0);
+                        let step = if action == "pane.previous" {
+                            ids.len() - 1
+                        } else {
+                            1
+                        };
+                        self.focus(&ids[(index + step) % ids.len()]);
+                    }
                 }
             }
             "tab.next" => {

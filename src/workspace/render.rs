@@ -96,19 +96,42 @@ impl Workspace {
             .as_ref()
             .and_then(|d| view.active_space.as_deref().and_then(|id| d.node(id)))
         {
-            for tab in space["tabs"].as_array().into_iter().flatten() {
+            let tabs = space["tabs"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+            let titles: Vec<_> = tabs
+                .iter()
+                .map(|tab| {
+                    format!(
+                        " {} ",
+                        tab["name"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("Terminal")
+                    )
+                })
+                .collect();
+            let widths: Vec<_> = titles
+                .iter()
+                .map(|title| {
+                    unicode_width::UnicodeWidthStr::width(title.as_str()).min(u16::MAX as usize)
+                        as u16
+                })
+                .collect();
+            let active = tabs
+                .iter()
+                .position(|tab| tab["id"].as_str() == view.active_tab.as_deref())
+                .unwrap_or(0);
+            let start = tab_window_start(&widths, active, area.width.saturating_sub(width));
+            for (tab, title) in tabs.iter().zip(titles.iter()).skip(start) {
+                if x >= area.width {
+                    break;
+                }
                 let id = tab["id"].as_str().unwrap_or("");
-                let title = format!(
-                    " {} ",
-                    tab["name"]
-                        .as_str()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("Terminal")
-                );
-                let w = (title.chars().count() as u16).min(area.width.saturating_sub(x));
+                let w = (unicode_width::UnicodeWidthStr::width(title.as_str())
+                    .min(u16::MAX as usize) as u16)
+                    .min(area.width.saturating_sub(x));
                 let rect = Rect::new(x, 0, w, 1);
                 frame.render_widget(
-                    Paragraph::new(title).style(Style::default().fg(
+                    Paragraph::new(title.as_str()).style(Style::default().fg(
                         if view.active_tab.as_deref() == Some(id) {
                             Color::Yellow
                         } else {
@@ -175,5 +198,30 @@ impl Workspace {
         if let Some(dialog) = &self.dialog {
             crate::dialog::render(frame, dialog);
         }
+    }
+}
+
+fn tab_window_start(widths: &[u16], active: usize, available: u16) -> usize {
+    let active = active.min(widths.len().saturating_sub(1));
+    let mut start = active;
+    let mut used = widths.get(active).copied().unwrap_or(0).min(available);
+    while start > 0 && u32::from(used) + u32::from(widths[start - 1]) <= u32::from(available) {
+        start -= 1;
+        used += widths[start];
+    }
+    start
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overflow_window_keeps_selected_tab_visible() {
+        assert_eq!(tab_window_start(&[8, 8, 8, 8], 3, 20), 2);
+        assert_eq!(tab_window_start(&[8, 8, 8, 8], 0, 20), 0);
+        assert_eq!(tab_window_start(&[8, 80, 8], 1, 20), 1);
+        assert_eq!(tab_window_start(&[8, 8, 8], 2, 24), 0);
+        assert_eq!(tab_window_start(&[], 0, 0), 0);
+        assert_eq!(tab_window_start(&[8, 8], 1, 0), 1);
     }
 }

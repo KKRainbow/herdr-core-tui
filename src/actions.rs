@@ -63,6 +63,11 @@ fn change_value(result: herdr_client_lib::commands::ChangeOutcome) -> Value {
 fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
     json!({"code":output.code,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)})
 }
+fn focus_created(view: &mut View, document: &herdr_client_lib::document::Document, pane: &str) {
+    if view.focus(document, pane) {
+        view.zoomed = None;
+    }
+}
 pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
 
 pub async fn execute(
@@ -185,7 +190,7 @@ pub async fn execute(
             .adopt(machine, placement.unwrap(), required(&args, "terminal")?)
             .await?;
         if let Ok(doc) = session.document(machine) {
-            view.focus(&doc, &pane);
+            focus_created(view, &doc, &pane);
         }
         return Ok(change_value(outcome));
     }
@@ -214,7 +219,7 @@ pub async fn execute(
                     )
                     .await?;
                 if let Ok(doc) = session.document(machine) {
-                    view.focus(&doc, &pane);
+                    focus_created(view, &doc, &pane);
                 }
                 return Ok(creation_value(&result));
             }
@@ -239,7 +244,7 @@ pub async fn execute(
                     )
                     .await?;
                 if let Ok(doc) = session.document(machine) {
-                    view.focus(&doc, &pane);
+                    focus_created(view, &doc, &pane);
                 }
                 let workspace = match &result.workspace {
                     Ok(created) => creation_value(created),
@@ -300,7 +305,7 @@ pub async fn execute(
             )
             .await?;
         if let Ok(doc) = session.document(machine) {
-            view.focus(&doc, &pane);
+            focus_created(view, &doc, &pane);
         }
         let mut value = creation_value(&result);
         value["pane"] = json!(view.focused);
@@ -315,6 +320,32 @@ pub async fn execute(
 mod tests {
     use super::*;
     use herdr_client_lib::transport::HcConfig;
+    #[test]
+    fn creation_focus_leaves_zoom() {
+        use herdr_client_lib::document::{Document, terminal_pane};
+        let mut doc = Document::default();
+        doc.create_space("s", "", "").unwrap();
+        doc.create_tab("s", "t", "", terminal_pane("a", "1"))
+            .unwrap();
+        doc.split("a", "split", Axis::Row, terminal_pane("b", "2"))
+            .unwrap();
+        let mut view = View::default();
+        view.focus(&doc, "a");
+        view.zoomed = Some("a".into());
+        focus_created(&mut view, &doc, "b");
+        assert_eq!(view.focused.as_deref(), Some("b"));
+        assert_eq!(view.zoomed, None);
+        assert_eq!(
+            crate::layout::panes(
+                &doc.node("t").unwrap()["root"],
+                ratatui::layout::Rect::new(0, 0, 80, 24),
+                view.focused.as_deref(),
+                view.zoomed.as_deref()
+            )
+            .len(),
+            2
+        );
+    }
     #[tokio::test]
     #[ignore = "requires isolated HC_TUI_TEST_ROOT and core socket access"]
     async fn workspace_and_worktree_workflows() {

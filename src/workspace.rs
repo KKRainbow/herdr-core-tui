@@ -51,11 +51,30 @@ struct ResizeDrag {
     origin: u16,
     value: f64,
 }
+enum Pressed {
+    Workspace(String),
+    Tab(String),
+}
 enum Drag {
     Splitter(ResizeDrag),
     Sidebar,
     Section,
     Select(String),
+    /// A press on a space or tab: a click on release, or a reorder once it moves.
+    Press {
+        target: Pressed,
+        x: u16,
+        y: u16,
+    },
+    /// A space (with its worktree group) and where it would land: before a space, or at the end.
+    Workspace {
+        source: String,
+        target: Option<(Option<String>, u16)>,
+    },
+    Tab {
+        tab: String,
+        insert: Option<usize>,
+    },
 }
 struct Toast {
     text: String,

@@ -55,6 +55,7 @@ Press prefix+? for the full keybind list and prefix+q to detach.
 | b | Collapse the sidebar |
 
 Click spaces, tabs, and agents to navigate.
+Drag spaces and tabs to reorder them; a main checkout moves with its linked worktrees.
 Click `new` for a workspace, `menu` for keybinds, reload, and detach, and `+` for a tab.
 Right-click a space, tab, or pane for its menu.
 Space menus offer worktree creation, opening, and removal in Git repositories.

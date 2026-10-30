@@ -1,4 +1,5 @@
 //! Keyboard and mouse behavior adapted from Herdr `src/client/shell/{input,mouse,overlay_input,actions}.rs`.
+use super::Pressed;
 use super::*;
 use crate::editor::TextEditor;
 use crossterm::event::MouseEvent;
@@ -1609,11 +1610,11 @@ impl Workspace {
                     if let Some((_, key)) = hit.group_toggle.filter(|(r, _)| contains(*r, x, y)) {
                         self.toggle_group(key);
                     } else {
-                        if self.mode == Mode::Navigate {
-                            self.mode = Mode::Terminal;
-                            self.chrome.selected_workspace_id = None;
-                        }
-                        self.focus_container(&hit.workspace_id);
+                        self.drag = Some(Drag::Press {
+                            target: Pressed::Workspace(hit.workspace_id),
+                            x,
+                            y,
+                        });
                     }
                 } else if let Some((_, id)) = hits
                     .agents
@@ -1625,7 +1626,11 @@ impl Workspace {
                 } else if let Some((_, id)) =
                     hits.tabs.iter().find(|(r, _)| contains(*r, x, y)).cloned()
                 {
-                    self.focus_container(&id);
+                    self.drag = Some(Drag::Press {
+                        target: Pressed::Tab(id),
+                        x,
+                        y,
+                    });
                 } else if contains(hits.new_tab, x, y) {
                     return self.action("new_tab").await;
                 } else if contains(hits.tab_scroll_left, x, y) {
@@ -1735,6 +1740,168 @@ impl Workspace {
         Ok(false)
     }
 
+    /// Linked worktrees move with their main checkout, not on their own.
+    fn workspace_draggable(&self, space: &str) -> bool {
+        self.snapshot
+            .workspace(space)
+            .is_some_and(|w| !w.worktree.as_ref().is_some_and(|t| t.is_linked_worktree))
+    }
+
+    /// Herdr's drop slots: above each top-level row, and below the last one.
+    fn workspace_drop_target_at(&self, y: u16) -> Option<(Option<String>, u16)> {
+        let hits = &self.hits;
+        if hits.workspace_body.height == 0
+            || y < hits.workspace_body.y.saturating_sub(1)
+            || y >= hits.new_workspace.y
+        {
+            return None;
+        }
+        let snapshot = &self.snapshot;
+        let mut slots: Vec<(Option<String>, u16)> = hits
+            .workspaces
+            .iter()
+            .filter(|hit| !hit.indented)
+            .filter(|hit| {
+                hit.group_toggle.as_ref().is_none_or(|(_, key)| {
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .find(|w| {
+                            w.worktree
+                                .as_ref()
+                                .is_some_and(|t| t.key == *key && !t.is_linked_worktree)
+                        })
+                        .is_some_and(|w| w.workspace_id == hit.workspace_id)
+                })
+            })
+            .map(|hit| (Some(hit.workspace_id.clone()), hit.rect.y.saturating_sub(1)))
+            .collect();
+        let entries = chrome::workspace_entries(snapshot, &self.chrome.collapsed_groups);
+        let last_hit = hits.workspaces.last()?;
+        let last_position = entries
+            .iter()
+            .position(|e| snapshot.workspaces[e.index].workspace_id == last_hit.workspace_id)?;
+        let next = entries.get(last_position + 1);
+        let next_in_group = next.is_some_and(|entry| {
+            entry.indented
+                || last_hit.group_toggle.as_ref().is_some_and(|(_, key)| {
+                    snapshot.workspaces[entry.index]
+                        .worktree
+                        .as_ref()
+                        .is_some_and(|t| t.key == *key)
+                })
+        });
+        if !next_in_group {
+            let before = next.map(|e| snapshot.workspaces[e.index].workspace_id.clone());
+            let row = last_hit.rect.bottom();
+            if row < hits.new_workspace.y {
+                slots.push((before, row));
+            }
+        }
+        slots
+            .into_iter()
+            .enumerate()
+            .min_by_key(|(index, (_, row))| (y.abs_diff(*row), *index))
+            .map(|(_, slot)| slot)
+    }
+
+    /// The gap between tabs under the pointer: 0 is before the first tab.
+    fn tab_drop_index_at(&self, x: u16, y: u16) -> Option<usize> {
+        let space = self.snapshot.focused_workspace_id.as_deref()?;
+        let tabs: Vec<&str> = self
+            .snapshot
+            .tabs
+            .iter()
+            .filter(|t| t.workspace_id == space)
+            .map(|t| t.tab_id.as_str())
+            .collect();
+        let hits = &self.hits;
+        let visible: Vec<(usize, Rect)> = hits
+            .tabs
+            .iter()
+            .filter_map(|(rect, id)| tabs.iter().position(|t| t == id).map(|i| (i, *rect)))
+            .collect();
+        let (first_index, first_rect) = *visible.first()?;
+        let (last_index, last_rect) = *visible.last()?;
+        if y != first_rect.y {
+            return None;
+        }
+        if contains(hits.tab_scroll_left, x, y) {
+            return Some(0);
+        }
+        if contains(hits.tab_scroll_right, x, y) {
+            return Some(tabs.len());
+        }
+        let left_edge = if first_index == 0 {
+            first_rect.x
+        } else {
+            hits.tab_scroll_left.right()
+        };
+        let right_edge = if last_index + 1 >= tabs.len() {
+            last_rect.right()
+        } else {
+            hits.tab_scroll_right.x.saturating_sub(1)
+        };
+        if x <= left_edge {
+            return Some(first_index);
+        }
+        if x >= right_edge {
+            return Some(last_index + 1);
+        }
+        for (index, rect) in visible {
+            if x < rect.x + rect.width / 2 {
+                return Some(index);
+            }
+            if x < rect.right() {
+                return Some(index + 1);
+            }
+        }
+        Some(last_index + 1)
+    }
+
+    async fn move_workspace(&mut self, source: &str, before: Option<&str>) {
+        let Some(workspace) = self.snapshot.workspace(source) else {
+            return;
+        };
+        let mut ids = vec![source.to_owned()];
+        if let Some(worktree) = &workspace.worktree {
+            ids.extend(
+                self.snapshot
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.workspace_id != source)
+                    .filter(|w| w.worktree.as_ref().is_some_and(|t| t.key == worktree.key))
+                    .map(|w| w.workspace_id.clone()),
+            );
+        }
+        if before.is_some_and(|target| ids.iter().any(|id| id == target)) {
+            return;
+        }
+        self.run("space.move", json!({"ids":ids,"before":before}))
+            .await;
+    }
+
+    /// Moves a tab into a gap between tabs, as Herdr's tab drag does.
+    async fn move_tab_to(&mut self, tab: &str, insert: usize) {
+        let Some(space) = self.snapshot.tab(tab).map(|t| t.workspace_id.clone()) else {
+            return;
+        };
+        let tabs: Vec<&str> = self
+            .snapshot
+            .tabs
+            .iter()
+            .filter(|t| t.workspace_id == space)
+            .map(|t| t.tab_id.as_str())
+            .collect();
+        let Some(current) = tabs.iter().position(|t| *t == tab) else {
+            return;
+        };
+        let index = if insert > current { insert - 1 } else { insert }.min(tabs.len() - 1);
+        if index != current {
+            self.run("tab.move", json!({"id":tab,"index":index})).await;
+        }
+    }
+
     fn focus_agent_hit(&mut self, id: &str) {
         match id.strip_prefix('@') {
             Some(address) => self.focus_agent(address),
@@ -1800,6 +1967,83 @@ impl Workspace {
         let (x, y) = (mouse.column, mouse.row);
         let released = matches!(mouse.kind, MouseEventKind::Up(_));
         match drag {
+            Drag::Press {
+                target,
+                x: from_x,
+                y: from_y,
+            } => {
+                let moved = x.abs_diff(from_x).max(y.abs_diff(from_y)) >= 1;
+                if released {
+                    match target {
+                        Pressed::Workspace(space) => {
+                            if self.mode == Mode::Navigate {
+                                self.mode = Mode::Terminal;
+                                self.chrome.selected_workspace_id = None;
+                            }
+                            self.focus_container(&space);
+                        }
+                        Pressed::Tab(tab) => self.focus_container(&tab),
+                    }
+                } else if moved && matches!(mouse.kind, MouseEventKind::Drag(_)) {
+                    self.drag = Some(match target {
+                        Pressed::Workspace(source) if self.workspace_draggable(&source) => {
+                            match self.workspace_drop_target_at(y) {
+                                Some(target) => Drag::Workspace {
+                                    source,
+                                    target: Some(target),
+                                },
+                                None => Drag::Press {
+                                    target: Pressed::Workspace(source),
+                                    x: from_x,
+                                    y: from_y,
+                                },
+                            }
+                        }
+                        Pressed::Tab(tab) => match self.tab_drop_index_at(x, y) {
+                            Some(insert) => Drag::Tab {
+                                tab,
+                                insert: Some(insert),
+                            },
+                            None => Drag::Press {
+                                target: Pressed::Tab(tab),
+                                x: from_x,
+                                y: from_y,
+                            },
+                        },
+                        target => Drag::Press {
+                            target,
+                            x: from_x,
+                            y: from_y,
+                        },
+                    });
+                } else {
+                    self.drag = Some(Drag::Press {
+                        target,
+                        x: from_x,
+                        y: from_y,
+                    });
+                }
+            }
+            Drag::Workspace { source, .. } => {
+                let target = self.workspace_drop_target_at(y);
+                if released {
+                    if let Some((before, _)) = target {
+                        self.move_workspace(&source, before.as_deref()).await;
+                    }
+                } else {
+                    self.drag = Some(Drag::Workspace { source, target });
+                }
+            }
+            Drag::Tab { tab, .. } => {
+                let insert = self.tab_drop_index_at(x, y);
+                if released {
+                    if let Some(insert) = insert {
+                        self.move_tab_to(&tab, insert).await;
+                    }
+                } else {
+                    self.drag = Some(Drag::Tab { tab, insert });
+                }
+            }
             Drag::Sidebar => {
                 self.sidebar_width =
                     (x + 1).clamp(shell::SIDEBAR_MIN_WIDTH, shell::SIDEBAR_MAX_WIDTH);

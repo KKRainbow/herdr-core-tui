@@ -48,6 +48,7 @@ pub struct CopyBar {
 pub struct WorkspaceHit {
     pub rect: Rect,
     pub workspace_id: String,
+    pub indented: bool,
     pub group_toggle: Option<(Rect, String)>,
 }
 

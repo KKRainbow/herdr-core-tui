@@ -70,7 +70,38 @@ fn focus_created(view: &mut View, document: &herdr_client_lib::document::Documen
         view.zoomed = None;
     }
 }
-pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
+pub const HELP: &str = "space.new / tab.new / pane.split • name, folder, argv\nspace.rename / tab.rename / pane.rename • id, name\nspace.move / tab.move • id, index    space.move • ids, before\npane.move • id, destination, index\npane.swap • id, other    pane.resize • id, weight\nspace.close / tab.close / pane.close • id, confirm\nterminal.keep • terminal    terminal.park • id\nworktree.list / worktree.branches • repository\nworktree.new • repository, branch, path, new_branch\nworktree.open • path    worktree.remove • repository, path, id, confirm\nMachine, focus, zoom, copy and search are private viewer actions.";
+
+/// Moves spaces together, in the given order, to just before `before` (or to the end).
+fn move_spaces(
+    document: &mut herdr_client_lib::document::Document,
+    ids: &[String],
+    before: Option<&str>,
+) -> std::result::Result<(), herdr_client_lib::document::Error> {
+    use herdr_client_lib::document::Error;
+    let order: Vec<String> = document.value()["spaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|space| space["id"].as_str().map(str::to_owned))
+        .collect();
+    if ids.is_empty() || ids.iter().any(|id| !order.contains(id)) {
+        return Err(Error::InvalidTarget);
+    }
+    let mut rest: Vec<String> = order.into_iter().filter(|id| !ids.contains(id)).collect();
+    let at = match before {
+        Some(target) => rest
+            .iter()
+            .position(|id| id == target)
+            .ok_or(Error::InvalidTarget)?,
+        None => rest.len(),
+    };
+    rest.splice(at..at, ids.iter().cloned());
+    for (index, id) in rest.iter().enumerate() {
+        document.reorder(id, index)?;
+    }
+    Ok(())
+}
 
 pub async fn execute(
     session: &mut Session,
@@ -87,6 +118,15 @@ pub async fn execute(
         let id = target(&args, view, kind)?;
         let name = text(&args, "name").ok_or("name is required")?;
         return written(session.edit(machine, |d| d.rename(&id, name)).await?);
+    }
+    if command == "space.move" && args.get("ids").is_some() {
+        let ids: Vec<String> = serde_json::from_value(args["ids"].clone())?;
+        let before = text(&args, "before").map(str::to_owned);
+        return written(
+            session
+                .edit(machine, |d| move_spaces(d, &ids, before.as_deref()))
+                .await?,
+        );
     }
     if matches!(command, "space.move" | "tab.move") {
         let id = target(&args, view, kind)?;
@@ -341,6 +381,27 @@ mod tests {
             pane: "b".into(),
         };
         assert_eq!(launch_source(&doc, &tab), (Some("s".into()), None));
+    }
+    #[test]
+    fn space_blocks_move_together_before_a_target() {
+        use herdr_client_lib::document::Document;
+        let mut doc = Document::default();
+        for space in ["a", "b", "c", "d"] {
+            doc.create_space(space, "", "").unwrap();
+        }
+        let order = |doc: &Document| {
+            doc.value()["spaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        move_spaces(&mut doc, &["d".into(), "b".into()], Some("a")).unwrap();
+        assert_eq!(order(&doc), ["d", "b", "a", "c"]);
+        move_spaces(&mut doc, &["d".into()], None).unwrap();
+        assert_eq!(order(&doc), ["b", "a", "c", "d"]);
+        assert!(move_spaces(&mut doc, &["b".into()], Some("b")).is_err());
     }
     #[test]
     fn creation_focus_leaves_zoom() {

@@ -34,6 +34,12 @@ pub struct ChromeState {
     pub collapsed_groups: HashSet<String>,
     pub section_split: f32,
     pub selected_workspace_id: Option<String>,
+    /// The space being dragged, drawn highlighted while it moves.
+    pub dragged_workspace_id: Option<String>,
+    /// The row between spaces where a dragged space would land.
+    pub workspace_drop_row: Option<u16>,
+    /// The gap between tabs where a dragged tab would land.
+    pub tab_drop_index: Option<usize>,
 }
 
 pub fn display_width(text: &str) -> u16 {
@@ -669,8 +675,10 @@ fn render_workspace_rows(
     focused: bool,
     selected: bool,
     navigating: bool,
+    dragged: bool,
 ) {
     let palette = &config.palette;
+    let highlighted = focused || dragged;
     for (row_index, row) in rows.iter().enumerate() {
         let y = area.y + row_index as u16;
         if y >= area.bottom() {
@@ -697,7 +705,7 @@ fn render_workspace_rows(
         } else {
             x = x.saturating_add(3);
         }
-        let workspace_style = if focused {
+        let workspace_style = if highlighted {
             Style::default()
                 .fg(palette.text)
                 .add_modifier(Modifier::BOLD)
@@ -727,6 +735,8 @@ fn render_workspace_rows(
     }
     let background = if selected {
         Some(workspace_selection_background(palette))
+    } else if dragged {
+        Some(palette.surface1)
     } else if focused {
         Some(workspace_active_background(palette, navigating))
     } else {
@@ -847,8 +857,11 @@ pub fn render_sidebar(
         }
         let rect = Rect::new(body.x, y, content_width, row_height);
         let selected = state.selected_workspace_id.as_deref() == Some(&workspace.workspace_id);
+        let dragged = state.dragged_workspace_id.as_deref() == Some(&workspace.workspace_id);
         if selected {
             buffer.set_style(rect, Style::default().bg(palette.selection_bg));
+        } else if dragged {
+            buffer.set_style(rect, Style::default().bg(palette.surface1));
         } else if workspace.focused {
             buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
         }
@@ -862,6 +875,7 @@ pub fn render_sidebar(
             workspace.focused,
             selected,
             state.selected_workspace_id.is_some(),
+            dragged,
         );
         let group_toggle = render_parent_group_toggle(
             buffer,
@@ -874,6 +888,7 @@ pub fn render_sidebar(
         hits.workspaces.push(WorkspaceHit {
             rect,
             workspace_id: workspace.workspace_id.clone(),
+            indented: entry.indented,
             group_toggle,
         });
         y = y.saturating_add(row_height);
@@ -882,6 +897,19 @@ pub fn render_sidebar(
         let track = Rect::new(body.right().saturating_sub(1), body.y, 1, body.height);
         hits.workspace_scrollbar = track;
         render_list_scrollbar(buffer, track, metrics, palette);
+    }
+    if let Some(row) = state.workspace_drop_row.filter(|row| {
+        *row >= workspace_area.y.saturating_add(1)
+            && *row < workspace_area.bottom().saturating_sub(1)
+    }) {
+        put_text(
+            buffer,
+            body.x,
+            row,
+            body.width,
+            &"─".repeat(body.width as usize),
+            Style::default().fg(palette.accent),
+        );
     }
     let footer_y = workspace_area.bottom().saturating_sub(1);
     hits.new_workspace = Rect::new(
@@ -1006,6 +1034,7 @@ pub fn render_collapsed_sidebar(
         hits.workspaces.push(WorkspaceHit {
             rect,
             workspace_id: workspace.workspace_id.clone(),
+            indented: false,
             group_toggle: None,
         });
     }
@@ -1467,6 +1496,51 @@ pub fn render_tab_bar(
             Style::default().fg(palette.overlay0),
         );
     }
+    if let Some(x) = state
+        .tab_drop_index
+        .and_then(|insert| tab_drop_indicator_x(hits, &tabs, insert))
+    {
+        put_text(
+            buffer,
+            x.min(content.right().saturating_sub(1)),
+            area.y,
+            1,
+            "│",
+            Style::default().fg(palette.accent),
+        );
+    }
+}
+
+fn tab_drop_indicator_x(hits: &Hits, tabs: &[&Tab], insert_index: usize) -> Option<u16> {
+    let visible: Vec<(usize, Rect)> = hits
+        .tabs
+        .iter()
+        .filter_map(|(rect, id)| {
+            tabs.iter()
+                .position(|tab| tab.tab_id == *id)
+                .map(|index| (index, *rect))
+        })
+        .collect();
+    let (first_index, first_rect) = *visible.first()?;
+    let (last_index, last_rect) = *visible.last()?;
+    if insert_index == 0 {
+        return Some(if first_index == 0 {
+            first_rect.x
+        } else {
+            hits.tab_scroll_left.right()
+        });
+    }
+    if let Some((_, rect)) = visible.iter().find(|(index, _)| *index == insert_index) {
+        return Some(rect.x.saturating_sub(1));
+    }
+    if insert_index >= tabs.len() {
+        return Some(if last_index + 1 >= tabs.len() {
+            last_rect.right()
+        } else {
+            hits.tab_scroll_right.x.saturating_sub(1)
+        });
+    }
+    None
 }
 
 fn centered_tab_scroll(focused: usize, widths: &[u16], available: u16) -> usize {

@@ -39,6 +39,19 @@ impl Workspace {
 
     fn render_frame(&mut self, frame: &mut ratatui::Frame) {
         let palette = self.config.palette.clone();
+        (
+            self.chrome.dragged_workspace_id,
+            self.chrome.workspace_drop_row,
+            self.chrome.tab_drop_index,
+        ) = match &self.drag {
+            Some(Drag::Workspace { source, target }) => (
+                Some(source.clone()),
+                target.as_ref().map(|(_, row)| *row),
+                None,
+            ),
+            Some(Drag::Tab { insert, .. }) => (None, None, *insert),
+            _ => (None, None, None),
+        };
         let view = self.view();
         let mut cursor = None;
         for pane in &self.panes {

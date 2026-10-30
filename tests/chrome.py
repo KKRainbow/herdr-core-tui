@@ -1,4 +1,4 @@
-"""Exercise Herdr's sidebar, menus, tab bar, and pane context menu with a mouse."""
+"""Exercise Herdr's sidebar, menus, tab bar, drag reorder, and pane context menu with a mouse."""
 import fcntl
 import json
 import os
@@ -94,6 +94,37 @@ try:
     os.write(master, b"\x03Mouse space\r")
     until(lambda: document()["spaces"][0]["name"] == "Mouse space")
 
+    def drag(points):
+        read_for(.05)
+        (x, y), *rest = points
+        os.write(master, f"\x1b[<0;{x};{y}M".encode())
+        for x, y in rest:
+            read_for(.1)
+            os.write(master, f"\x1b[<32;{x};{y}M".encode())
+        read_for(.1)
+        os.write(master, f"\x1b[<0;{x};{y}m".encode())
+
+    def spaces():
+        return [space["id"] for space in document()["spaces"]]
+
+    # Drag the first space below the others: it moves to the end of the shared order.
+    for count_spaces in (2, 3):
+        os.write(master, b"\x02N")
+        until(lambda: len(spaces()) == count_spaces)
+    first = spaces()[0]
+    drag([(6, 3), (6, 4), (6, 11)])
+    until(lambda: spaces()[-1] == first)
+    # Drag the focused space's first tab past its second one.
+    def tab_ids():
+        return {space["id"]: [tab["id"] for tab in space["tabs"]] for space in document()["spaces"]}
+
+    before = tab_ids()
+    os.write(master, b"\x02c\r")
+    until(lambda: tab_ids() != before)
+    focused, tabs = next((id, tabs) for id, tabs in tab_ids().items() if len(tabs) > len(before[id]))
+    drag([(30, 1), (31, 1), (60, 1)])
+    until(lambda: tab_ids()[focused] == tabs[::-1])
+
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 60, 0, 0))
     os.kill(process.pid, signal.SIGWINCH)
     output = read_for(.5)
@@ -103,7 +134,7 @@ try:
     os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
     assert termios.tcgetattr(slave) == original
-    print("PASS: spaces/agents sidebar, new and menu buttons, + tab prompt, pane and space context menus, tab overflow, narrow host, collapse, detach")
+    print("PASS: spaces/agents sidebar, new and menu buttons, + tab prompt, pane and space context menus, tab overflow, space and tab drag reorder, narrow host, collapse, detach")
 finally:
     if process and process.poll() is None:
         process.kill()

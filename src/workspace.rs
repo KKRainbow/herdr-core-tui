@@ -367,6 +367,9 @@ impl Workspace {
     }
     /// Asks git about each space's folder on its machine, at most every few seconds per folder.
     fn refresh_git(&mut self) -> bool {
+        if self.document().is_none() {
+            return false;
+        }
         let folders: HashSet<String> = self
             .snapshot
             .workspaces
@@ -892,6 +895,9 @@ pub async fn run(
             Next::Git(update) => {
                 app.refresh_snapshot();
                 dirty |= app.refresh_git();
+                if app.document().is_none() {
+                    app.invalidate_git();
+                }
                 dirty |= app.git_poller.apply(update, &mut app.git);
             }
             Next::Paint => render_due = true,

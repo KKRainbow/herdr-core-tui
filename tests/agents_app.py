@@ -14,7 +14,13 @@ def wait(marker):
   if select.select([master],[],[],.1)[0]:output+=os.read(master,65536)
  assert marker in output,output[-2000:]
 try:
- wait(b"blocked")
+ deadline=time.monotonic()+10
+ while True:
+  reported=json.loads(subprocess.check_output(["hc","get",record["address"]],env=env,timeout=5))
+  if reported.get("reported")is True and (reported.get("status")or{}).get("state")=="blocked":break
+  assert time.monotonic()<deadline,reported
+  time.sleep(.05)
+ wait("●".encode())
  output=b"";end=time.monotonic()+10
  while b"DETACHED_AGENT"not in output and time.monotonic()<end:
   os.write(master,b'\x02a')

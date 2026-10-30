@@ -219,6 +219,7 @@ pub const MENU: &[(&str, &str)] = &[
     ("Open worktree", "worktree.open"),
     ("Remove worktree", "worktree.remove"),
     ("Select machine", "machine"),
+    ("Next terminal", "terminal.next"),
     ("Command", "command"),
     ("Help", "help"),
 ];

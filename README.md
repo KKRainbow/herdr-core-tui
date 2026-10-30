@@ -14,10 +14,12 @@ Run `just check` and `just build`.
 
 ## Run
 
-Run `target/debug/herder-tui --session SESSION --instance NAME` for the workspace interface.
+Run `target/debug/herder-tui` for the workspace interface on the same core as `hc`.
+The session defaults to `HC_SESSION`, or `default` when that variable is unset or empty.
+Use `--session SESSION` to select another core session and `--instance NAME` to name the viewer.
 The instance name is optional for interactive use and required for live control.
 Add a terminal address to use the single-terminal viewer.
-The core session is required.
+The sidebar shows the selected session.
 Set `HC_BINARY` to select a core executable.
 Quitting detaches viewers and leaves shared terminal programs running.
 
@@ -34,6 +36,7 @@ Ctrl+C goes to the focused program.
 | h j k l or arrows | Focus an adjacent pane |
 | p / n / S | Next pane / tab / space |
 | a | Next reported agent, including one without a pane |
+| e | Next live terminal, including one without a pane or reported status |
 | z | Toggle private zoom |
 | r / x | Rename / close pane |
 | [ | Enter copy mode |
@@ -42,7 +45,9 @@ Ctrl+C goes to the focused program.
 | : | Open a named command |
 | ? | Help |
 
-Click spaces, tabs, and agents to navigate.
+Click spaces, tabs, and terminals to navigate.
+The terminal list includes ordinary running programs that do not report agent status.
+Opening an unplaced terminal previews it without changing the shared layout.
 Right-click a pane for the actions menu.
 Shift+right-click sends the click to the program.
 Drag a pane's right border to change its weight.
@@ -106,8 +111,8 @@ Keep the returned review in `expected` to reject changed confirmation targets.
 
 Run `herder-tui --session SESSION instances` to list live viewers.
 Run `herder-tui --session SESSION --instance NAME view state` to inspect one viewer.
-Live view commands include `pane.focus`, `tab.focus`, `space.focus`, `agent.focus`, `zoom`, `machine`, and `quit`.
-Focus commands take an `id`; agent focus takes a `terminal` address.
+Live view commands include `pane.focus`, `tab.focus`, `space.focus`, `terminal.focus`, `agent.focus`, `zoom`, `machine`, and `quit`.
+Pane, tab, and space focus take an `id`; terminal and agent focus take a `terminal` address.
 The control socket is private to the current user and disappears when the viewer exits.
 Each named instance has its own saved view.
 Use `hc` for terminal automation and machine management.

@@ -19,6 +19,7 @@ impl Default for Preferences {
                 ("l".into(), "pane.right".into()),
                 ("S".into(), "space.next".into()),
                 ("a".into(), "agent.next".into()),
+                ("e".into(), "terminal.next".into()),
                 ("m".into(), "menu".into()),
                 ("s".into(), "space.new".into()),
                 ("t".into(), "tab.new".into()),

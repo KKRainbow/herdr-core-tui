@@ -9,7 +9,7 @@ pub struct Options {
     pub positional: Vec<String>,
 }
 pub fn parse(args: Vec<String>) -> Result<Options> {
-    let mut session = None;
+    let mut session = std::env::var("HC_SESSION").ok();
     let mut binary = std::env::var_os("HC_BINARY").unwrap_or_else(|| "hc".into());
     let mut machine = String::new();
     let mut instance = None;
@@ -29,8 +29,11 @@ pub fn parse(args: Vec<String>) -> Result<Options> {
         }
     }
     let session = session
+        .as_deref()
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or("An explicit --session SESSION is required")?;
+        .unwrap_or("default")
+        .to_owned();
     Ok(Options {
         config: HcConfig {
             binary: binary.into(),
@@ -42,7 +45,7 @@ pub fn parse(args: Vec<String>) -> Result<Options> {
         positional,
     })
 }
-pub const HELP: &str = "herder-tui --session SESSION [--hc PATH] [--machine MACHINE] [--instance NAME] [TERMINAL]\n\nWithout TERMINAL, open the workspace interface. Ctrl+B opens commands; Ctrl+Q quits.\n\nherder-tui --session SESSION [--machine MACHINE] do COMMAND [JSON]\n  Run a shared structural command without opening a TUI. Targets must be explicit.\nherder-tui --session SESSION --instance NAME view COMMAND [JSON]\n  Control only the named live TUI. Commands: state, pane.focus, tab.focus, space.focus,\n  agent.focus, zoom, machine, quit. Focus takes {\"id\":\"...\"}.\nherder-tui --session SESSION instances\n  List live TUI instances. No automatic choice when several exist.\n\nExamples:\n  herder-tui --session work --instance desk\n  herder-tui --session work do space.new '{\"name\":\"API\",\"folder\":\"/path/to/repo\"}'\n  herder-tui --session work --instance desk view zoom\n  herder-tui --session work do help\n\nUse hc for runtime automation: run, send, keys, read, wait, and machine management.\nThe TUI never replaces or upgrades installed app/core binaries.";
+pub const HELP: &str = "herder-tui [--session SESSION] [--hc PATH] [--machine MACHINE] [--instance NAME] [TERMINAL]\n\nSession defaults to HC_SESSION or default, like hc.\nWithout TERMINAL, open the workspace interface. Ctrl+B opens commands; Ctrl+Q quits.\n\nherder-tui [--session SESSION] [--machine MACHINE] do COMMAND [JSON]\n  Run a shared structural command without opening a TUI. Targets must be explicit.\nherder-tui [--session SESSION] --instance NAME view COMMAND [JSON]\n  Control only the named live TUI. Commands: state, pane.focus, tab.focus, space.focus,\n  agent.focus, terminal.focus, zoom, machine, quit. Focus takes {\"id\":\"...\"}.\nherder-tui [--session SESSION] instances\n  List live TUI instances. No automatic choice when several exist.\n\nExamples:\n  herder-tui --instance desk\n  herder-tui do space.new '{\"name\":\"API\",\"folder\":\"/path/to/repo\"}'\n  herder-tui --instance desk view zoom\n  herder-tui --session work do help\n\nUse hc for runtime automation: run, send, keys, read, wait, and machine management.\nThe TUI never replaces or upgrades installed app/core binaries.";
 pub async fn headless(options: &Options) -> Result<bool> {
     let Some(kind) = options.positional.first().map(String::as_str) else {
         return Ok(false);
@@ -109,8 +112,7 @@ pub async fn headless(options: &Options) -> Result<bool> {
 mod tests {
     use super::*;
     #[test]
-    fn requires_explicit_session_and_target_instance() {
-        assert!(parse(vec![]).is_err());
+    fn accepts_explicit_session_and_target_instance() {
         let o = parse(
             ["--session", "test", "--instance", "a", "view", "zoom"]
                 .map(str::to_owned)

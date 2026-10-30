@@ -57,6 +57,7 @@ struct ResizeDrag {
     value: f64,
 }
 pub struct Workspace {
+    session_name: String,
     identities: BTreeMap<String, String>,
     renders: u64,
     parsed_bytes: u64,
@@ -192,7 +193,7 @@ impl Workspace {
                     "terminal.park" | "split.row" | "split.column" | "zoom"
                 ))
         {
-            return Err("This agent has no workspace pane. Keep it in a tab first.".into());
+            return Err("This terminal has no workspace pane. Keep it in a tab first.".into());
         }
         Ok(())
     }
@@ -211,7 +212,7 @@ impl Workspace {
                 id: format!("@{address}"),
                 name: None,
                 terminal: Some(address.clone()),
-                description: "Agent".into(),
+                description: "Terminal".into(),
                 area: body,
             });
         } else if let Some(doc) = self.document()
@@ -350,7 +351,7 @@ impl Workspace {
             self.focus(pane);
             return Ok(());
         }
-        if command == "agent.focus" {
+        if matches!(command, "agent.focus" | "terminal.focus") {
             let address = args["terminal"].as_str().ok_or("terminal is required")?;
             if !self
                 .session
@@ -424,7 +425,7 @@ impl Workspace {
             "menu" => self.dialog = Some(Dialog::Menu { selected: 0 }),
             "help" => {
                 self.dialog = Some(Dialog::Message(format!(
-                    "Ctrl+B then:\ns: space   t: tab   %: horizontal split   \": vertical split\np: next pane   n: next tab   z: zoom   r: rename   x: close\n[: copy mode   :: command   w: new worktree\nCopy: arrows/hjkl move, Space anchors, y copies, / searches, n repeats, Esc exits.\nPageUp/PageDown scroll history. Shift+drag selects.\nClick spaces, tabs and agents to navigate. Alt+wheel cycles all panes, including hidden stack panes.\nConfig: {}\n\n{}",
+                    "Ctrl+B then:\ns: space   t: tab   %: horizontal split   \": vertical split\np: next pane   n: next tab   z: zoom   r: rename   x: close\n[: copy mode   :: command   w: new worktree\nCopy: arrows/hjkl move, Space anchors, y copies, / searches, n repeats, Esc exits.\nPageUp/PageDown scroll history. Shift+drag selects.\nClick spaces, tabs and terminals to navigate. Ctrl+B e cycles live terminals. Alt+wheel cycles all panes, including hidden stack panes.\nConfig: {}\n\n{}",
                     preferences::config_path().display(),
                     actions::HELP
                 )))
@@ -437,12 +438,18 @@ impl Workspace {
                     view.focused.clone()
                 };
             }
-            "agent.next" => {
+            "agent.next" | "terminal.next" => {
                 let agents: Vec<_> = self
                     .session
                     .terminals
                     .values()
-                    .filter(|r| r["reported"] == true || !r["status"].is_null())
+                    .filter(|r| {
+                        if action == "terminal.next" {
+                            r["state"] == "live"
+                        } else {
+                            r["reported"] == true || !r["status"].is_null()
+                        }
+                    })
                     .filter_map(|r| r["address"].as_str())
                     .collect();
                 let active = self
@@ -729,6 +736,7 @@ pub async fn run(
     let identities = identities(&client, &machine_list);
     let session = Session::connect(client, machines, TIME).await?;
     let mut app = Workspace {
+        session_name: config.session.clone(),
         identities,
         renders: 0,
         parsed_bytes: 0,
@@ -811,7 +819,8 @@ pub async fn run(
                 } else {
                     let result = match request.command.as_str() {
                         "zoom" => app.action("zoom").await,
-                        "pane.focus" | "tab.focus" | "space.focus" | "agent.focus" | "machine" => {
+                        "pane.focus" | "tab.focus" | "space.focus" | "agent.focus"
+                        | "terminal.focus" | "machine" => {
                             app.command(&request.command, request.args).await
                         }
                         _ => Err(

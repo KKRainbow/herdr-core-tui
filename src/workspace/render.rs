@@ -23,13 +23,15 @@ impl Workspace {
         let width = sidebar.min(area.width / 3);
         let sidebar_area = Rect::new(0, 0, width, area.height.saturating_sub(1));
         frame.render_widget(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .title(if self.machine.is_empty() {
-                    " Local "
+            Block::default().borders(Borders::RIGHT).title(format!(
+                " {} · {} ",
+                if self.machine.is_empty() {
+                    "Local"
                 } else {
                     &self.machine
-                }),
+                },
+                self.session_name
+            )),
             sidebar_area,
         );
         let mut y = 1;
@@ -57,7 +59,7 @@ impl Workspace {
         y += 1;
         if y < area.height.saturating_sub(2) {
             frame.render_widget(
-                Paragraph::new(" Agents").style(Style::default().fg(Color::Cyan)),
+                Paragraph::new(" Terminals").style(Style::default().fg(Color::Cyan)),
                 Rect::new(0, y, width.saturating_sub(1), 1),
             );
             y += 1;
@@ -72,7 +74,7 @@ impl Workspace {
             let status = record["status"]["state"]
                 .as_str()
                 .or_else(|| record["status"].as_str());
-            if status.is_none() && record["reported"] != true {
+            if record["state"] != "live" && status.is_none() && record["reported"] != true {
                 continue;
             }
             let unseen = self
@@ -84,7 +86,7 @@ impl Workspace {
                 "{}{} {}",
                 if unseen { "*" } else { "" },
                 address,
-                status.unwrap_or("unknown")
+                status.unwrap_or_else(|| record["state"].as_str().unwrap_or("unknown"))
             );
             let row = Rect::new(0, y, width.saturating_sub(1), 1);
             frame.render_widget(Paragraph::new(text), row);

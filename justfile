@@ -36,6 +36,9 @@ install prefix: release
 cli-integration: build
     python3 tests/cli.py
 
+discovery-integration: build
+    python3 tests/discovery.py
+
 msrv:
     cargo +1.89.0 check --all-targets --locked
 

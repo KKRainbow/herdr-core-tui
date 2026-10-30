@@ -14,6 +14,39 @@ pub struct Preferences {
     pub agent_panel_sort: String,
     /// Herdr `[keys]` names mapped to bindings, such as `"new_tab": "prefix+c"`.
     pub keys: BTreeMap<String, String>,
+    pub sound: Sound,
+}
+/// Herdr's `[ui.sound]`: on by default, with optional mp3 replacements.
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sound {
+    pub enabled: bool,
+    /// Replaces the built-in sound an agent makes when it finishes.
+    pub done_path: Option<PathBuf>,
+    /// Replaces the built-in sound an agent makes when it asks a question.
+    pub request_path: Option<PathBuf>,
+}
+impl Default for Sound {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            done_path: None,
+            request_path: None,
+        }
+    }
+}
+impl Sound {
+    /// The replacement file, with relative paths resolved from the config folder.
+    pub fn path(&self, sound: crate::sound::Sound) -> Option<PathBuf> {
+        let path = match sound {
+            crate::sound::Sound::Done => self.done_path.as_ref(),
+            crate::sound::Sound::Request => self.request_path.as_ref(),
+        }?;
+        Some(match config_path().parent() {
+            Some(folder) if path.is_relative() => folder.join(path),
+            _ => path.clone(),
+        })
+    }
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -23,6 +56,7 @@ impl Default for Preferences {
             status_indicators: "dots".into(),
             agent_panel_sort: "spaces".into(),
             keys: BTreeMap::new(),
+            sound: Sound::default(),
         }
     }
 }

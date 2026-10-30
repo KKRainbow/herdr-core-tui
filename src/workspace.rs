@@ -29,7 +29,7 @@ use herdr_client_lib::{
 use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::{self, stdout},
     time::{Duration, Instant},
 };
@@ -193,8 +193,33 @@ impl Workspace {
         let active = self
             .active_id()
             .and_then(|id| self.surfaces.get(&id).map(|s| s.address.clone()));
+        let visible: HashSet<String> = self
+            .panes
+            .iter()
+            .filter_map(|pane| {
+                let local = pane.terminal.as_ref()?;
+                Some(if pane.id.starts_with('@') {
+                    local.clone()
+                } else {
+                    qualify(local, &self.machine)
+                })
+            })
+            .collect();
+        let mut sounds = BTreeSet::new();
         for (identity, record) in &self.session.terminals {
             let word = snapshot::word(record).map(str::to_owned);
+            // Only changes seen while running sound; an agent already waiting at startup does not.
+            if let Some(previous) = self.words.get(identity) {
+                let watched = self.focused
+                    && record["address"]
+                        .as_str()
+                        .is_some_and(|address| visible.contains(address));
+                sounds.extend(crate::sound::for_change(
+                    previous.as_deref(),
+                    word.as_deref(),
+                    watched,
+                ));
+            }
             if self.words.get(identity) != Some(&word) {
                 self.sequence += 1;
                 self.sequences.insert(identity.clone(), self.sequence);
@@ -205,6 +230,11 @@ impl Workspace {
                 word,
                 record["address"].as_str() == active.as_deref(),
             );
+        }
+        if self.preferences.sound.enabled {
+            for sound in sounds {
+                crate::sound::play(sound, self.preferences.sound.path(sound));
+            }
         }
         if let Some(doc) = self.document() {
             let view = self.view_mut();

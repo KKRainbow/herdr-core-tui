@@ -1,7 +1,7 @@
 # Third-party notices
 
 Ghostty retains its license and notices in `vendor/ghostty`.
-Adapted Herdr sources retain Apache-2.0 licensing; see `docs/provenance.md`.
+Adapted Herdr sources and Herdr's notification sounds in `assets/sounds` retain Apache-2.0 licensing; see `docs/provenance.md`.
 The release source bundle includes the pinned library license.
 
 | Package | Version | License |

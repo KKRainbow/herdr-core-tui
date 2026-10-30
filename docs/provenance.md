@@ -16,5 +16,7 @@ The sidebar, agents panel, tab bar, mode bar, and list scrolling adapt `src/clie
 Menus, prompts, keybind help, the navigator, and worktree dialogs adapt `src/client/shell/{overlays,worktree_overlays,context_menu,global_menu,aggregate_navigation}.rs`.
 Pane borders, titles, scrollbars, and selection colors adapt `src/ui/panes.rs` and `src/ui/scrollbar.rs`.
 Mode and overlay input adapt `src/client/shell/{input,overlay_input,mouse,actions}.rs`.
+Space and tab drag reorder adapts the chrome drag in `src/client/shell/mouse.rs`.
+Notification sounds adapt `src/sound.rs` and the state rules in `src/app/actions.rs`; `assets/sounds` holds Herdr's unchanged `done.mp3` and `request.mp3`.
 Kitty image extraction, PNG decoding, and hyperlink lookup adapt the pinned app's `src/vt.rs`.
 Images use clipped half-block cells rather than app GPU textures.

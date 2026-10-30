@@ -2,7 +2,7 @@
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,termios,time
 root=os.environ["TUI_APP_TEST_ROOT"]
 assert root.startswith("/tmp/")
-env=dict(os.environ,HERDR_APP_HOME=root+"/app",XDG_RUNTIME_DIR=root+"/runtime",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",TERM="xterm-256color")
+env=dict(os.environ,HERDER_TUI_DISABLE_SOUND="1",HERDR_APP_HOME=root+"/app",XDG_RUNTIME_DIR=root+"/runtime",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",TERM="xterm-256color")
 def app():return json.loads(subprocess.check_output(["herdr-app","ls"],env=env))
 def active():return [(s["id"],t["id"])for s in app()["spaces"]for t in s["tabs"]if t["active"]]
 before=active()

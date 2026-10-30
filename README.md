@@ -84,6 +84,10 @@ Set `theme` to a Herdr theme name such as `catppuccin`, `tokyo-night`, `dracula`
 Set `status_indicators` to `dots` or `symbols`, `agent_panel_sort` to `spaces` or `priority`, and `sidebar_width`.
 Set `keys` to map Herdr `[keys]` action names to bindings, for example `{"next_agent": "prefix+a"}`.
 An empty binding disables an action.
+Set `sound` to `{"enabled": false}` to silence agents, or give `done_path` and `request_path` mp3 files to replace Herdr's sounds.
+An agent asking a question always sounds; a finished agent sounds unless you are watching its pane.
+Sounds play through `paplay`, `pw-play`, `ffplay`, `mpg123`, or `mpv` on Linux and `afplay` on macOS.
+Set `HERDER_TUI_DISABLE_SOUND` to silence them for a session.
 Omitted settings use Herdr's defaults.
 Use the menu's reload config to apply changes.
 View state and sidebar layout use the matching XDG state directory under `herder-tui`.

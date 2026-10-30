@@ -58,6 +58,9 @@ Side-by-side captures compared the sidebar, agents panel, tab bar, pane borders,
 | `integration_pty.py`, `cli.py`, `compatibility.py`, `remote.py` | Passed |
 | Worktrees in a scratch repository | Created, grouped, collapsed, opened, and removed through the interface |
 | `workspace_app.py`, `agents_app.py`, `app_terminal.py` | Updated for Herdr keys; not rerun because no headless Weston display was available |
+| `resize.py` | Passed: 400 host resizes while six panes stream; failed before the frame-size fix |
+| Drag reorder | Spaces, worktree groups, and tabs reorder in the shared document (`chrome.py`, unit test) |
+| Sounds | A fake player logged request for a question, nothing for a watched finish, and done for an unwatched finish |
 | Rust 1.89.0 | All targets checked |
 | Performance profile | Idle and hidden output: no CPU or renders at 1 and 15 panes; visible output 13.4% and 14.6% CPU, about 1 MiB more memory than before |
 

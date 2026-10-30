@@ -9,6 +9,7 @@ mod layout;
 mod paint;
 mod preferences;
 mod shell;
+mod sound;
 mod vt;
 mod workspace;
 use crossterm::{

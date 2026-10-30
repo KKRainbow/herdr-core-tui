@@ -9,11 +9,18 @@ impl Workspace {
     pub(super) fn draw(
         &mut self,
         screen: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         self.renders += 1;
         self.hits = Hits::default();
-        screen.draw(|frame| self.render_frame(frame))?;
-        Ok(())
+        let mut resized = false;
+        screen.draw(|frame| {
+            if frame.area() != self.area {
+                self.geometry(frame.area());
+                resized = true;
+            }
+            self.render_frame(frame)
+        })?;
+        Ok(resized)
     }
 
     fn copy_bar(&self) -> Option<CopyBar> {

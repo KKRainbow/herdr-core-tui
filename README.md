@@ -111,6 +111,7 @@ Do not point integration tests at live work.
 `just cli-integration` verifies headless operations and multiple live instances.
 `just discovery-integration` verifies hc session defaults and terminal discovery.
 `just chrome-integration` verifies the Herdr chrome and mouse workflows.
+`just resize-integration` resizes the host repeatedly while panes stream output.
 `just profile` measures one and fifteen output-producing panes.
 See [validation](docs/validation.md), [performance](docs/performance.md), and [provenance](docs/provenance.md).
 

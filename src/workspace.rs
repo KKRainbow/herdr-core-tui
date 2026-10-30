@@ -94,6 +94,8 @@ pub struct Workspace {
     sidebar_width: u16,
     sidebar_collapsed: bool,
     layout: shell::Layout,
+    /// The host size the pane layout was computed for.
+    area: Rect,
     snapshot: Snapshot,
     git: HashMap<String, GitInfo>,
     git_checked: HashMap<String, Instant>,
@@ -252,6 +254,7 @@ impl Workspace {
         Ok(())
     }
     fn geometry(&mut self, area: Rect) {
+        self.area = area;
         self.layout = shell::layout(
             area.width,
             area.height,
@@ -787,6 +790,7 @@ pub async fn run(
         keys: Keymap::new(&preferences.keys),
         preferences,
         layout: shell::Layout::default(),
+        area: Rect::default(),
         snapshot: Snapshot::default(),
         git: HashMap::new(),
         git_checked: HashMap::new(),
@@ -830,8 +834,10 @@ pub async fn run(
             }
             activate_layout = false;
             app.refresh_snapshot();
-            app.draw(&mut screen)?;
-            dirty = false;
+            // The host can resize while streams resize; redraw at the size the frame used.
+            let resized = app.draw(&mut screen)?;
+            dirty = resized;
+            activate_layout |= resized;
             render_due = false;
         }
         enum Next {

@@ -42,6 +42,9 @@ discovery-integration: build
 chrome-integration: build
     python3 tests/chrome.py
 
+resize-integration: build
+    python3 tests/resize.py
+
 msrv:
     cargo +1.89.0 check --all-targets --locked
 

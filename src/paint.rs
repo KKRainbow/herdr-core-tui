@@ -13,6 +13,7 @@ pub fn terminal(
 ) {
     let selected = selection_style(palette);
     let buffer = frame.buffer_mut();
+    let area = area.intersection(buffer.area);
     for (y, row) in snapshot.rows.iter().take(area.height as usize).enumerate() {
         let mut tail = false;
         for (x, cell) in row.iter().take(area.width as usize).enumerate() {

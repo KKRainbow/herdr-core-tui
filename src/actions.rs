@@ -63,22 +63,8 @@ fn change_value(result: herdr_client_lib::commands::ChangeOutcome) -> Value {
 fn git_value(output: &herdr_client_lib::worktrees::Output) -> Value {
     json!({"code":output.code,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)})
 }
-fn launch_source(
-    document: &herdr_client_lib::document::Document,
-    placement: &Placement,
-) -> (Option<String>, Option<String>) {
-    match placement {
-        Placement::Split { space, target, .. } => (
-            Some(space.clone()),
-            document
-                .node(target)
-                .and_then(|n| n["content"]["terminal"].as_str())
-                .map(str::to_owned),
-        ),
-        Placement::Tab { space, .. } => (Some(space.clone()), None),
-        Placement::Space { .. } => (None, None),
-    }
-}
+#[cfg(test)]
+use herdr_client_lib::commands::launch_source;
 fn focus_created(view: &mut View, document: &herdr_client_lib::document::Document, pane: &str) {
     if view.focus(document, pane) {
         view.zoomed = None;
@@ -296,32 +282,9 @@ pub async fn execute(
         }
     }
     if let Some(placement) = placement {
-        let (space, terminal) = launch_source(&document, &placement);
-        let mut folder = text(&args, "folder").map(str::to_owned);
-        if folder.is_none() {
-            if let Some(terminal) = terminal {
-                let record = session
-                    .client
-                    .call(
-                        "terminal.get",
-                        json!({"terminal":herdr_client_lib::commands::qualify(&terminal, machine)}),
-                        session.deadline,
-                    )
-                    .await?;
-                folder = record["foreground"]["cwd"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| record["cwd"].as_str().filter(|s| !s.is_empty()))
-                    .map(str::to_owned);
-            }
-            folder = folder.or_else(|| {
-                space
-                    .and_then(|id| document.node(&id))
-                    .and_then(|s| s["folder"].as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-            });
-        }
+        let folder = session
+            .launch_directory(machine, &placement, text(&args, "folder"))
+            .await?;
         let argv = match args.get("argv") {
             None => vec![],
             Some(value) => serde_json::from_value::<Vec<String>>(value.clone())?,

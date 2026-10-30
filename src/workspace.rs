@@ -98,28 +98,7 @@ impl Workspace {
         let identities = identities(&self.session.client, &machines);
         let mut changed = self.identities != identities;
         self.identities = identities;
-        for name in self
-            .session
-            .documents
-            .keys()
-            .filter(|name| !name.is_empty())
-            .cloned()
-            .collect::<Vec<_>>()
-        {
-            let connected = machines["machines"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|record| record["name"] == name && record["state"] == "connected");
-            let slot = self.session.documents.get_mut(&name).unwrap();
-            if !connected {
-                changed |= slot.document.take().is_some();
-                slot.error = Some("Remote machine unavailable".into());
-            } else if slot.document.is_none() {
-                self.session.refresh(&name).await;
-                changed = true;
-            }
-        }
+        changed |= self.session.poll_availability().await?;
         Ok(changed)
     }
     fn document(&self) -> Option<herdr_client_lib::document::Document> {

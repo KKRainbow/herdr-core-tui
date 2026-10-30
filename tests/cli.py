@@ -22,12 +22,12 @@ with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
    end=time.monotonic()+10;data=b""
    while b"Duplicate" not in data and time.monotonic()<end:
     if select.select([master],[],[],.1)[0]:data+=os.read(master,65536)
-   assert b"Recovery" in data and b"failed:" in data and b"Duplicate" in data,data[-2000:]
+   assert b"Recovery" in data and b"failed:" in data and b"already exist" in data,data[-2000:]
    assert bad["address"].encode() in data,data[-1000:]
   for name in ["one","two"]:
    state=cli("--instance",name,"view","state")
    assert state["document_available"] and state["view"]["active_space"]==space,state
-   assert bad["address"] in state["notice"] and "Duplicate" in state["notice"],state
+   assert bad["address"] in state["notice"] and "already exists in the workspace" in state["notice"],state
   assert cli("--instance","one","view","tab.focus",json.dumps({"id":"recovered-tab"}))["ok"]
   end=time.monotonic()+5
   while True:

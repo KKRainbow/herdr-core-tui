@@ -22,6 +22,7 @@ integration: build
     python3 tests/worktree_remove.py
     python3 tests/attention.py
     python3 tests/startup.py
+    python3 tests/keys.py
 
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored

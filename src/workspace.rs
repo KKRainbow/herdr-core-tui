@@ -97,6 +97,10 @@ pub struct Workspace {
     /// The attention last written to the state file, to save only changes.
     attention_saved: String,
     listed_once: bool,
+    /// The terminal of the latest alert, for Herdr's open notification target.
+    notification_target: Option<String>,
+    /// Scrollback text waiting to open in `$EDITOR` once the loop can hand over the host.
+    pending_editor: Option<String>,
     drag: Option<Drag>,
     pub session: Session,
     pub views: BTreeMap<String, View>,
@@ -227,8 +231,11 @@ impl Workspace {
                 looking,
             );
             // Changes already made before this viewer started aren't news.
-            if self.listed_once {
-                sounds.extend(alert.map(crate::sound::for_alert));
+            if self.listed_once
+                && let Some(alert) = alert
+            {
+                sounds.insert(crate::sound::for_alert(alert));
+                self.notification_target = Some(record.address.clone());
             }
             self.attention.set_word(identity, word, app, looking);
             if looking {
@@ -814,6 +821,8 @@ pub async fn run(
         },
         attention_saved: String::new(),
         listed_once: false,
+        notification_target: None,
+        pending_editor: None,
         drag: None,
         session,
         views: preferences::read_views(&view_key),
@@ -974,6 +983,16 @@ pub async fn run(
                     Ok(true) => break,
                     Ok(false) => {}
                     Err(e) => app.toast(e.to_string(), true),
+                }
+                if let Some(text) = app.pending_editor.take() {
+                    // The editor reads the keyboard; stop reading host events meanwhile.
+                    drop(events);
+                    let edited = Host::suspend(|| crate::scrollback::edit(&text))?;
+                    events = EventStream::new();
+                    screen.clear()?;
+                    if let Err(error) = edited {
+                        app.toast(error.to_string(), true);
+                    }
                 }
                 if old != app.active_id() && activate {
                     let size = screen.size()?;

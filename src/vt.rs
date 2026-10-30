@@ -114,6 +114,8 @@ fn install_png_decoder() {
 }
 
 pub struct Vt {
+    /// A requested local clear waiting for the stream to reach ground.
+    clear_pending: bool,
     term: GhosttyTerminal,
     state: GhosttyRenderState,
     rows_it: GhosttyRenderStateRowIterator,
@@ -133,6 +135,7 @@ impl Vt {
         install_png_decoder();
         unsafe {
             let mut vt = Self {
+                clear_pending: false,
                 term: std::ptr::null_mut(),
                 state: std::ptr::null_mut(),
                 rows_it: std::ptr::null_mut(),
@@ -361,7 +364,103 @@ impl Vt {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        let mut bytes = bytes;
+        if self.clear_pending {
+            let mut consumed = 0;
+            let result = unsafe {
+                ghostty_terminal_vt_write_until_ground(
+                    self.term,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    &mut consumed,
+                )
+            };
+            if result != GHOSTTY_SUCCESS {
+                return;
+            }
+            bytes = &bytes[consumed..];
+            self.clear_at_ground();
+        }
         unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
+    }
+    fn data<T: Default>(&self, key: GhosttyTerminalData) -> T {
+        let mut value = T::default();
+        unsafe { ghostty_terminal_get(self.term, key, &mut value as *mut T as *mut c_void) };
+        value
+    }
+    /// Herdr's clear pane for this viewer: history and the rows above the
+    /// cursor's line go; that line and the cursor stay, so later output from
+    /// the program still lands where it expects. Core's screen is unchanged.
+    /// Returns false on the alternate screen, as Herdr does.
+    pub fn clear(&mut self) -> bool {
+        if self.alt_screen() {
+            return false;
+        }
+        if self.data::<bool>(GHOSTTY_TERMINAL_DATA_VT_GROUND) {
+            self.clear_at_ground();
+        } else {
+            // Out-of-band sequences are safe only between the program's sequences.
+            self.clear_pending = true;
+        }
+        true
+    }
+    fn clear_at_ground(&mut self) {
+        self.clear_pending = false;
+        let row = self.data::<u16>(GHOSTTY_TERMINAL_DATA_CURSOR_Y);
+        let col = self.data::<u16>(GHOSTTY_TERMINAL_DATA_CURSOR_X);
+        let mut sequence = b"\x1b[3J".to_vec();
+        if row > 0 {
+            // Up a line, to its end, erase everything before; then back down.
+            sequence.extend_from_slice(b"\x1b[A\x1b[9999C\x1b[1J\x1b[B");
+            sequence.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+        }
+        unsafe { ghostty_terminal_vt_write(self.term, sequence.as_ptr(), sequence.len()) };
+        self.scroll_to_bottom();
+    }
+    /// Plain text of history and screen, soft wraps joined, as Herdr hands to `$EDITOR`.
+    pub fn text(&self) -> String {
+        unsafe {
+            let mut formatter: GhosttyFormatter = std::ptr::null_mut();
+            let options = GhosttyFormatterTerminalOptions {
+                size: std::mem::size_of::<GhosttyFormatterTerminalOptions>(),
+                emit: GHOSTTY_FORMATTER_FORMAT_PLAIN,
+                unwrap: true,
+                trim: true,
+                extra: GhosttyFormatterTerminalExtra {
+                    size: std::mem::size_of::<GhosttyFormatterTerminalExtra>(),
+                    screen: GhosttyFormatterScreenExtra {
+                        size: std::mem::size_of::<GhosttyFormatterScreenExtra>(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                selection: std::ptr::null(),
+            };
+            if ghostty_formatter_terminal_new(std::ptr::null(), &mut formatter, self.term, options)
+                != GHOSTTY_SUCCESS
+            {
+                return String::new();
+            }
+            let mut out_ptr = std::ptr::null_mut();
+            let mut out_len = 0usize;
+            let result = ghostty_formatter_format_alloc(
+                formatter,
+                std::ptr::null(),
+                &mut out_ptr,
+                &mut out_len,
+            );
+            ghostty_formatter_free(formatter);
+            let text = if result == GHOSTTY_SUCCESS && out_len > 0 {
+                String::from_utf8_lossy(std::slice::from_raw_parts(out_ptr.cast_const(), out_len))
+                    .into_owned()
+            } else {
+                String::new()
+            };
+            if !out_ptr.is_null() {
+                ghostty_free(std::ptr::null(), out_ptr, out_len);
+            }
+            text
+        }
     }
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols.max(1);
@@ -864,5 +963,37 @@ mod tests {
             ),
             b"\x1b[<0;3;2M"
         );
+    }
+    #[test]
+    fn text_includes_history_and_clear_keeps_the_cursor_line() {
+        let mut vt = Vt::new(20, 3);
+        for i in 0..10 {
+            vt.write(format!("line{i}\r\n").as_bytes());
+        }
+        vt.write(b"$ typed");
+        let text = vt.text();
+        assert!(text.contains("line0") && text.contains("$ typed"), "{text}");
+        assert!(vt.clear());
+        let text = vt.text();
+        assert!(!text.contains("line0") && !text.contains("line9"), "{text}");
+        assert!(text.contains("$ typed"), "{text}");
+        // The cursor stays where the program left it.
+        vt.write(b"X");
+        assert!(vt.text().contains("$ typedX"));
+    }
+
+    #[test]
+    fn clear_waits_for_ground_and_skips_the_alternate_screen() {
+        let mut vt = Vt::new(20, 3);
+        vt.write(b"before\r\n\x1b[");
+        assert!(vt.clear());
+        vt.write(b"31mred");
+        let text = vt.text();
+        assert!(
+            text.contains("red") && !text.contains("before") && !text.contains("31m"),
+            "{text}"
+        );
+        vt.write(b"\x1b[?1049h");
+        assert!(!vt.clear());
     }
 }

@@ -220,6 +220,32 @@ impl Workspace {
         let focused_pane = self.view().focused;
         match action {
             "help" => self.overlay = Some(Overlay::Help(Help::default())),
+            "open_notification_target" => {
+                if let Some(address) = self.notification_target.clone() {
+                    self.focus_agent(&address);
+                }
+            }
+            "edit_scrollback" => {
+                if let Some(surface) = self.active_id().and_then(|id| self.surfaces.get(&id)) {
+                    self.pending_editor = Some(surface.vt.text());
+                }
+            }
+            "clear_pane" => {
+                if let Some(surface) = self.active_id().and_then(|id| self.surfaces.get_mut(&id))
+                    && !surface.vt.clear()
+                {
+                    self.toast("the alternate screen cannot be cleared", true);
+                }
+            }
+            "resize_pane_left" | "resize_pane_right" | "resize_pane_up" | "resize_pane_down" => {
+                let (vertical, delta) = match action {
+                    "resize_pane_left" => (false, -RESIZE_STEP),
+                    "resize_pane_right" => (false, RESIZE_STEP),
+                    "resize_pane_up" => (true, -RESIZE_STEP),
+                    _ => (true, RESIZE_STEP),
+                };
+                self.resize_focused(vertical, delta).await;
+            }
             "detach" => return Ok(true),
             "reload_config" => match self.reload_config() {
                 Ok(()) => self.toast("config reloaded", false),
@@ -333,6 +359,26 @@ impl Workspace {
             "zoom" => self.toggle_zoom(),
             "resize_mode" => self.mode = Mode::Resize,
             "toggle_sidebar" => self.toggle_sidebar(),
+            action if action.starts_with("switch_workspace:") => {
+                let index: usize = action[17..].parse().unwrap_or(1);
+                let entries =
+                    chrome::workspace_entries(&self.snapshot, &self.chrome.collapsed_groups);
+                if let Some(id) = entries
+                    .get(index.saturating_sub(1))
+                    .map(|e| self.snapshot.workspaces[e.index].workspace_id.clone())
+                {
+                    self.focus_container(&id);
+                }
+            }
+            action if action.starts_with("focus_agent:") => {
+                let index: usize = action[12..].parse().unwrap_or(1);
+                if let Some(address) = chrome::ordered_agents(&self.snapshot, self.config.sort)
+                    .get(index.saturating_sub(1))
+                    .map(|a| a.address.clone())
+                {
+                    self.focus_agent(&address);
+                }
+            }
             action if action.starts_with("switch_tab:") => {
                 let index: usize = action[11..].parse().unwrap_or(1);
                 if let Some(tab) = self
@@ -1426,6 +1472,25 @@ impl Workspace {
             .selected_workspace_id
             .as_ref()
             .and_then(|id| ids.iter().position(|w| w == id));
+        let navigation = self.keys.navigation(&key).map(str::to_owned);
+        match navigation.as_deref() {
+            Some("navigate_workspace_up" | "navigate_workspace_down") if !ids.is_empty() => {
+                let up = navigation.as_deref() == Some("navigate_workspace_up");
+                let next = match (current, up) {
+                    (Some(i), true) => i.saturating_sub(1),
+                    (Some(i), false) => (i + 1).min(ids.len() - 1),
+                    (None, _) => 0,
+                };
+                self.chrome.selected_workspace_id = Some(ids[next].clone());
+                self.chrome.reveal_focused_workspace = true;
+                return Ok(false);
+            }
+            Some("navigate_pane_left") => return self.action("focus_pane_left").await,
+            Some("navigate_pane_right") => return self.action("focus_pane_right").await,
+            Some("navigate_pane_down") => return self.action("focus_pane_down").await,
+            Some("navigate_pane_up") => return self.action("focus_pane_up").await,
+            _ => {}
+        }
         match key.code {
             KeyCode::Up | KeyCode::Down if !ids.is_empty() => {
                 let next = match (current, key.code == KeyCode::Up) {
@@ -1455,10 +1520,8 @@ impl Workspace {
                 self.cycle_pane(key.code == KeyCode::BackTab);
                 return Ok(false);
             }
-            KeyCode::Left | KeyCode::Char('h') => return self.action("focus_pane_left").await,
-            KeyCode::Right | KeyCode::Char('l') => return self.action("focus_pane_right").await,
-            KeyCode::Char('j') => return self.action("focus_pane_down").await,
-            KeyCode::Char('k') => return self.action("focus_pane_up").await,
+            KeyCode::Left => return self.action("focus_pane_left").await,
+            KeyCode::Right => return self.action("focus_pane_right").await,
             _ => {}
         }
         if let Some(action) = self.keys.prefixed(&key) {
@@ -1482,6 +1545,11 @@ impl Workspace {
             KeyCode::Char('j') | KeyCode::Down => (true, RESIZE_STEP),
             _ => return,
         };
+        self.resize_focused(vertical, delta).await;
+    }
+
+    /// Moves the focused pane's divider along one axis, as resize mode does.
+    async fn resize_focused(&mut self, vertical: bool, delta: i32) {
         let Some(pane) = self
             .active_id()
             .and_then(|id| self.panes.iter().find(|p| p.id == id))

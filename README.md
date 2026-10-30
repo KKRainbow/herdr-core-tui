@@ -57,6 +57,14 @@ Press prefix+? for the full keybind list and prefix+q to detach.
 | w | Workspace navigation |
 | g | Go to any space, pane, agent, or terminal without a pane |
 | b | Collapse the sidebar |
+| s | Settings |
+| o | Go to the latest agent notification |
+| e | Open the pane's scrollback in `$EDITOR` |
+
+Unset by default, as in Herdr: `clear_pane`, `resize_pane_left/down/up/right`, `switch_workspace`, and `focus_agent`.
+Bind digit ranges as `"switch_workspace": "prefix+alt+1..9"`, or set `indexed.tabs`, `indexed.workspaces`, or `indexed.agents` to a modifier such as `alt`.
+`navigate_workspace_up/down` and `navigate_pane_left/down/up/right` change the keys inside workspace navigation.
+Clear pane drops this viewer's history and the rows above the cursor line; the program and other viewers keep theirs.
 
 Click spaces, tabs, and agents to navigate.
 Drag spaces and tabs to reorder them; a main checkout moves with its linked worktrees.

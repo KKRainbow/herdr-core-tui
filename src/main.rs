@@ -8,6 +8,7 @@ mod input;
 mod layout;
 mod paint;
 mod preferences;
+mod scrollback;
 mod shell;
 mod sound;
 mod vt;
@@ -33,8 +34,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 struct Host;
 impl Host {
     fn enter() -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
         let guard = Self;
+        Self::modes()?;
+        Ok(guard)
+    }
+    fn modes() -> io::Result<()> {
+        terminal::enable_raw_mode()?;
         execute!(
             stdout(),
             EnterAlternateScreen,
@@ -45,8 +50,14 @@ impl Host {
                 event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
-        )?;
-        Ok(guard)
+        )
+    }
+    /// Hands the host terminal to another program, then takes it back.
+    pub fn suspend<T>(run: impl FnOnce() -> T) -> io::Result<T> {
+        restore();
+        let result = run();
+        Self::modes()?;
+        Ok(result)
     }
 }
 fn restore() {

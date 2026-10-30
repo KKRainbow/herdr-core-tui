@@ -1,4 +1,4 @@
-"""Exercise persistent workspace, menu, tab, and split buttons with a mouse."""
+"""Exercise Herdr's sidebar, menus, tab bar, and pane context menu with a mouse."""
 import fcntl
 import json
 import os
@@ -38,9 +38,9 @@ try:
         assert marker in output, output[-2000:]
         return output
 
-    def click(x, y):
+    def click(x, y, button=0):
         read_for(.05)
-        os.write(master, f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode())
+        os.write(master, f"\x1b[<{button};{x};{y}M\x1b[<{button};{x};{y}m".encode())
 
     def document():
         return core.rpc("doc.get", {"name": "herdr-app"})["value"]
@@ -53,56 +53,57 @@ try:
                 return
         raise AssertionError("shared layout did not reflect mouse action")
 
-    output = wait_for(b"Ctrl+Q")
-    assert b"new" in output and b"menu" in output and b"spaces" in output, output[-2000:]
-    click(21, 12)
-    wait_for(b"Actions")
-    os.write(master, b"\x1b")
-    read_for()
-    click(2, 12)
-    wait_for(b"space.new")
-    os.write(master, ("Mouse workspace\t" + str(core.root) + "\tprintf CHROME_FIRST; cat\r").encode())
-    until(lambda: len((document() or {}).get("spaces", [])) == 1)
-    click(36, 1)
-    wait_for(b"tab.new")
-    os.write(master, b"Mouse tab\tprintf CHROME_TAB; cat\r")
-    until(lambda: len(document()["spaces"][0]["tabs"]) == 2)
-    click(97, 2)
-    wait_for(b"pane.split")
-    os.write(master, b"\tprintf CHROME_DOWN; cat\r")
-
     def count(node):
         return sum(count(c) for c in node["children"]) if "children" in node else 1
 
+    # A 26-column sidebar: spaces above, agents below, footer on row 12.
+    output = wait_for(b"agents")
+    assert b"spaces" in output and b"new" in output and b"menu" in output, output[-2000:]
+    click(22, 12)
+    wait_for(b"keybinds")
+    os.write(master, b"\x1b")
+    read_for()
+    click(2, 12)
+    until(lambda: len((document() or {}).get("spaces", [])) == 1)
+    space = document()["spaces"][0]
+    assert space["name"] == "" and space["tabs"][0]["name"] == "", space
+
+    # The tab bar starts after the sidebar: tab 1 is eight columns, then a gap and "+".
+    click(37, 1)
+    wait_for(b"new tab")
+    os.write(master, b"Mouse tab\r")
+    until(lambda: [t["name"] for t in document()["spaces"][0]["tabs"]] == ["", "Mouse tab"])
+
+    # Right-click a pane, then pick "Split right" (second item) from Herdr's pane menu.
+    click(60, 10, 2)
+    wait_for(b"Split right")
+    os.write(master, b"j\r")
     until(lambda: count(document()["spaces"][0]["tabs"][1]["root"]) == 2)
-    click(94, 13)
-    wait_for(b"pane.split")
-    os.write(master, b"\tprintf CHROME_RIGHT; cat\r")
+    os.write(master, b"\x02-")
     until(lambda: count(document()["spaces"][0]["tabs"][1]["root"]) == 3)
 
     tab = document()["spaces"][0]["tabs"][1]["id"]
     subprocess.run([str(binary), "do", "tab.rename", json.dumps({"id": tab, "name": "Long tab title " * 12})], env=core.env, stdout=subprocess.DEVNULL, check=True)
-    read_for()
-    click(99, 1)
-    wait_for(b"tab.new")
-    os.write(master, b"\x1b")
-    read_for()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+    wait_for(b" > ")
+
+    # Right-click the space row for its menu; Rename opens Herdr's prompt.
+    click(5, 3, 2)
+    wait_for(b"Rename")
+    os.write(master, b"\r")
+    wait_for(b"rename workspace")
+    os.write(master, b"\x03Mouse space\r")
+    until(lambda: document()["spaces"][0]["name"] == "Mouse space")
+
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 60, 0, 0))
     os.kill(process.pid, signal.SIGWINCH)
     output = read_for(.5)
     assert b"new" in output and b"menu" in output, output[-2000:]
-    click(10, 6)
-    wait_for(b"Actions")
-    os.write(master, b"\x1b")
-    read_for()
-    click(2, 6)
-    wait_for(b"space.new")
-    os.write(master, b"\x1b")
-    read_for()
-    os.write(master, b"\x11")
+    os.write(master, b"\x02b")
+    wait_for("»".encode())
+    os.write(master, b"\x02q")
     assert process.wait(timeout=5) == 0
     assert termios.tcgetattr(slave) == original
-    print("PASS: empty-state New/Menu, mouse workspace/tab creation, both split buttons, tab overflow, narrow-host controls, host restore")
+    print("PASS: spaces/agents sidebar, new and menu buttons, + tab prompt, pane and space context menus, tab overflow, narrow host, collapse, detach")
 finally:
     if process and process.poll() is None:
         process.kill()

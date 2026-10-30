@@ -44,6 +44,23 @@ Private views use stable core identities and separate instance state files.
 See [performance results](performance.md) for measurement scope, bounded retention, and raw results.
 See [the Libertty integration map](libertty.md) for future consumer work.
 
+## Herdr interface port
+
+Rechecked on Linux on 2026-10-30 against installed herdr 0.9.5 and hc 0.1.14.
+Side-by-side captures compared the sidebar, agents panel, tab bar, pane borders, mode bars, menus, prompts, keybind help, navigator, and worktree dialogs.
+
+| Check | Result |
+|---|---|
+| Formatting, Clippy, fast behavior tests | Passed: twenty-eight tests |
+| `chrome.py` | Passed: sidebar, new/menu, tab prompt, context menus, tab overflow, narrow host, collapse, detach |
+| `discovery.py` | Passed: unplaced terminal reached through Go to |
+| `geometry.py` | Passed with Herdr's layout and scrollbar gutter |
+| `integration_pty.py`, `cli.py`, `compatibility.py`, `remote.py` | Passed |
+| Worktrees in a scratch repository | Created, grouped, collapsed, opened, and removed through the interface |
+| `workspace_app.py`, `agents_app.py`, `app_terminal.py` | Updated for Herdr keys; not rerun because no headless Weston display was available |
+| Rust 1.89.0 | All targets checked |
+| Performance profile | Idle and hidden output: no CPU or renders at 1 and 15 panes; visible output 13.4% and 14.6% CPU, about 1 MiB more memory than before |
+
 ## Limits
 
 The local control endpoint uses Unix sockets; Windows requires a native transport.

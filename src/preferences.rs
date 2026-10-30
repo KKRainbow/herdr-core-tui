@@ -6,35 +6,57 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[serde(default)]
 pub struct Preferences {
     pub sidebar_width: u16,
+    /// Herdr theme name, such as `catppuccin` or `tokyo-night`.
+    pub theme: String,
+    /// `dots` or `symbols`, as Herdr's `ui.status_indicators`.
+    pub status_indicators: String,
+    /// `spaces` or `priority`, as Herdr's `ui.agent_panel_sort`.
+    pub agent_panel_sort: String,
+    /// Herdr `[keys]` names mapped to bindings, such as `"new_tab": "prefix+c"`.
     pub keys: BTreeMap<String, String>,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            sidebar_width: 24,
-            keys: BTreeMap::from([
-                ("h".into(), "pane.left".into()),
-                ("j".into(), "pane.down".into()),
-                ("k".into(), "pane.up".into()),
-                ("l".into(), "pane.right".into()),
-                ("S".into(), "space.next".into()),
-                ("a".into(), "agent.next".into()),
-                ("e".into(), "terminal.next".into()),
-                ("m".into(), "menu".into()),
-                ("s".into(), "space.new".into()),
-                ("t".into(), "tab.new".into()),
-                ("%".into(), "split.row".into()),
-                ("\"".into(), "split.column".into()),
-                ("x".into(), "pane.close".into()),
-                ("r".into(), "pane.rename".into()),
-                ("z".into(), "zoom".into()),
-                ("n".into(), "tab.next".into()),
-                ("p".into(), "pane.next".into()),
-                ("[".into(), "copy".into()),
-                ("?".into(), "help".into()),
-                (":".into(), "command".into()),
-                ("w".into(), "worktree.new".into()),
-            ]),
+            sidebar_width: 26,
+            theme: "catppuccin".into(),
+            status_indicators: "dots".into(),
+            agent_panel_sort: "spaces".into(),
+            keys: BTreeMap::new(),
+        }
+    }
+}
+impl Preferences {
+    pub fn shell(&self) -> crate::shell::Config {
+        crate::shell::Config {
+            palette: crate::shell::palette::Palette::from_name(&self.theme).unwrap_or_default(),
+            symbols: self.status_indicators.eq_ignore_ascii_case("symbols"),
+            sort: if self.agent_panel_sort.eq_ignore_ascii_case("priority") {
+                crate::shell::Sort::Priority
+            } else {
+                crate::shell::Sort::Spaces
+            },
+        }
+    }
+}
+/// Interface state the viewer keeps between runs, like Herdr's client preferences.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Chrome {
+    pub sidebar_width: Option<u16>,
+    pub sidebar_collapsed: bool,
+    pub sidebar_section_split: f32,
+    pub agent_panel_sort: Option<String>,
+    pub collapsed_groups: Vec<String>,
+}
+impl Default for Chrome {
+    fn default() -> Self {
+        Self {
+            sidebar_width: None,
+            sidebar_collapsed: false,
+            sidebar_section_split: 0.5,
+            agent_panel_sort: None,
+            collapsed_groups: vec![],
         }
     }
 }
@@ -56,13 +78,35 @@ pub fn load() -> Result<Preferences> {
         Err(e) => Err(e.into()),
     }
 }
-fn view_path(session: &str) -> PathBuf {
+fn state_path(kind: &str, session: &str) -> PathBuf {
     let name = session
         .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    base("XDG_STATE_HOME", ".local/state").join(format!("view-{name}.json"))
+    base("XDG_STATE_HOME", ".local/state").join(format!("{kind}-{name}.json"))
+}
+fn view_path(session: &str) -> PathBuf {
+    state_path("view", session)
+}
+pub fn read_chrome(session: &str) -> Chrome {
+    std::fs::read(state_path("chrome", session))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+pub fn save_chrome(session: &str, chrome: &Chrome) -> Result<()> {
+    write_atomic(
+        &state_path("chrome", session),
+        &serde_json::to_vec_pretty(chrome)?,
+    )
+}
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
 }
 pub fn read_views(session: &str) -> BTreeMap<String, View> {
     std::fs::read(view_path(session))
@@ -71,10 +115,5 @@ pub fn read_views(session: &str) -> BTreeMap<String, View> {
         .unwrap_or_default()
 }
 pub fn save_views(session: &str, views: &BTreeMap<String, View>) -> Result<()> {
-    let path = view_path(session);
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&temporary, serde_json::to_vec_pretty(views)?)?;
-    std::fs::rename(temporary, path)?;
-    Ok(())
+    write_atomic(&view_path(session), &serde_json::to_vec_pretty(views)?)
 }

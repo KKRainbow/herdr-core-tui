@@ -3,14 +3,20 @@ mod render;
 use crate::{
     Host, Result, actions,
     copy::{Copy, clipboard},
-    dialog::{Dialog, Form},
     input,
     layout::{self, Pane},
     paint, preferences,
+    shell::{
+        self, Hits, Mode,
+        chrome::ChromeState,
+        keys::Keymap,
+        overlays::{Overlay, OverlayRender},
+        snapshot::{self, GitInfo, Snapshot},
+    },
     vt::Vt,
 };
 use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use futures_util::{StreamExt, future::select_all};
 use herdr_client_lib::{
@@ -18,25 +24,21 @@ use herdr_client_lib::{
     commands::qualify,
     sync::Session,
     transport::HcConfig,
-    view::View,
+    view::{Identity, View},
 };
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::Rect,
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
-};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     io::{self, stdout},
-    time::Duration,
+    time::{Duration, Instant},
 };
 const TIME: Duration = Duration::from_secs(5);
+const GIT_REFRESH: Duration = Duration::from_secs(10);
+const TOAST: Duration = Duration::from_secs(4);
 struct Surface {
     ended: bool,
-    retry_at: std::time::Instant,
+    retry_at: Instant,
     address: String,
     stream: Option<Stream>,
     vt: Vt,
@@ -44,39 +46,63 @@ struct Surface {
     wanted: (u16, u16),
     error: Option<String>,
 }
-#[derive(Clone)]
-enum Hit {
-    Action(&'static str),
-    Split(String, &'static str),
-    Space(String),
-    Tab(String),
-    Pane(String),
-    Agent(String),
-}
 struct ResizeDrag {
     splitter: layout::Splitter,
     origin: u16,
     value: f64,
 }
+enum Drag {
+    Splitter(ResizeDrag),
+    Sidebar,
+    Section,
+    Select(String),
+}
+struct Toast {
+    text: String,
+    error: bool,
+    until: Instant,
+}
+/// A copy-mode search being typed in the mode bar.
+struct CopySearch {
+    query: crate::editor::TextEditor,
+}
 pub struct Workspace {
-    session_name: String,
+    view_key: String,
     identities: BTreeMap<String, String>,
     renders: u64,
     parsed_bytes: u64,
     attention: herdr_client_lib::view::Attention,
-    drag: Option<ResizeDrag>,
+    sequences: BTreeMap<Identity, u64>,
+    words: BTreeMap<Identity, Option<String>>,
+    sequence: u64,
+    drag: Option<Drag>,
     pub session: Session,
     pub views: BTreeMap<String, View>,
     pub machine: String,
+    machines: Vec<String>,
     surfaces: BTreeMap<String, Surface>,
     panes: Vec<Pane>,
-    hits: Vec<(Rect, Hit)>,
+    hits: Hits,
+    overlay: Option<Overlay>,
+    overlay_render: OverlayRender,
+    mode: Mode,
+    chrome: ChromeState,
+    chrome_saved: preferences::Chrome,
+    config: shell::Config,
+    keys: Keymap,
     preferences: preferences::Preferences,
-    dialog: Option<Dialog>,
-    prefix: bool,
+    sidebar_width: u16,
+    sidebar_collapsed: bool,
+    layout: shell::Layout,
+    snapshot: Snapshot,
+    git: HashMap<String, GitInfo>,
+    git_checked: HashMap<String, Instant>,
     focused: bool,
     peek: Option<String>,
+    previous_pane: Option<String>,
+    copy_search: Option<CopySearch>,
     notice: String,
+    toast: Option<Toast>,
 }
 impl Workspace {
     fn view(&self) -> View {
@@ -92,6 +118,15 @@ impl Workspace {
         let id = self.view_id();
         self.views.entry(id).or_default()
     }
+    fn toast(&mut self, text: impl Into<String>, error: bool) {
+        let text = text.into();
+        self.notice = text.clone();
+        self.toast = Some(Toast {
+            text,
+            error,
+            until: Instant::now() + TOAST,
+        });
+    }
     async fn refresh_identities(&mut self) -> Result<bool> {
         let machines = self
             .session
@@ -101,6 +136,7 @@ impl Workspace {
         let identities = identities(&self.session.client, &machines);
         let mut changed = self.identities != identities;
         self.identities = identities;
+        self.machines = machine_names(&machines);
         changed |= self.session.poll_availability().await?;
         Ok(changed)
     }
@@ -120,13 +156,13 @@ impl Workspace {
                     Ok(WriteOutcome::Written) => return None,
                     Ok(WriteOutcome::Conflict) => "workspace changed during recovery".into(),
                     Ok(WriteOutcome::Unavailable(error)) => error.clone(),
-                    Err(error) => error.to_string(),
+                    Err(error) => describe(error),
                 };
                 Some(format!("{}: {error}", outcome.terminal))
             })
             .collect::<Vec<_>>();
         if !errors.is_empty() {
-            self.notice = format!("Recovery failed: {}", errors.join("; "));
+            self.toast(format!("Recovery failed: {}", errors.join("; ")), true);
         }
         self.reconcile();
         true
@@ -137,17 +173,18 @@ impl Workspace {
             .active_id()
             .and_then(|id| self.surfaces.get(&id).map(|s| s.address.clone()));
         for (identity, record) in &self.session.terminals {
-            let word = record["status"]["state"]
-                .as_str()
-                .or_else(|| record["status"].as_str())
-                .map(str::to_owned);
+            let word = snapshot::word(record).map(str::to_owned);
+            if self.words.get(identity) != Some(&word) {
+                self.sequence += 1;
+                self.sequences.insert(identity.clone(), self.sequence);
+                self.words.insert(identity.clone(), word.clone());
+            }
             self.attention.observe(
                 identity.clone(),
                 word,
                 record["address"].as_str() == active.as_deref(),
             );
         }
-
         if let Some(doc) = self.document() {
             let view = self.view_mut();
             view.reconcile(&doc);
@@ -166,13 +203,20 @@ impl Workspace {
     }
     fn focus(&mut self, id: &str) {
         if let Some(doc) = self.document() {
+            let before = self.view().focused;
             self.view_mut().focus(&doc, id);
             if let Some(view) = self.views.get_mut(&self.view_id())
                 && view.zoomed.is_some()
             {
                 view.zoomed = view.focused.clone();
             }
-            self.peek = None;
+            if before.as_deref() != Some(id) && before.is_some() {
+                self.previous_pane = before.clone();
+            }
+            if self.peek.take().is_some() || before.as_deref() != Some(id) {
+                self.chrome.reveal_focused_tab = true;
+                self.chrome.reveal_focused_workspace = true;
+            }
         }
     }
     fn focus_agent(&mut self, address: &str) {
@@ -185,6 +229,14 @@ impl Workspace {
             self.focus(&pane);
         } else {
             self.peek = Some(address.into());
+        }
+    }
+    /// Focuses a space or tab at the pane its viewer last used there.
+    fn focus_container(&mut self, id: &str) {
+        if let Some(doc) = self.document()
+            && let Some(pane) = remembered_pane(&self.view(), &doc, id)
+        {
+            self.focus(pane);
         }
     }
     fn check_pane_action(&self, command: &str) -> Result<()> {
@@ -200,22 +252,24 @@ impl Workspace {
         Ok(())
     }
     fn geometry(&mut self, area: Rect) {
-        self.panes.clear();
-        let sidebar = self.preferences.sidebar_width.min(area.width / 3);
-        let body = Rect::new(
-            area.x + sidebar,
-            area.y + 1,
-            area.width - sidebar,
-            area.height.saturating_sub(2),
+        self.layout = shell::layout(
+            area.width,
+            area.height,
+            self.sidebar_width,
+            self.sidebar_collapsed,
         );
+        let body = self.layout.pane_surface;
+        self.panes.clear();
         let view = self.view();
         if let Some(address) = &self.peek {
             self.panes.push(Pane {
                 id: format!("@{address}"),
-                name: None,
                 terminal: Some(address.clone()),
                 description: "Terminal".into(),
                 area: body,
+                content: body,
+                bordered: false,
+                scrollbar: None,
             });
         } else if let Some(doc) = self.document()
             && let Some(root) = view
@@ -225,7 +279,78 @@ impl Workspace {
                 .and_then(|t| t.get("root"))
         {
             self.panes = layout::panes(root, body, view.focused.as_deref(), view.zoomed.as_deref());
+            let tab_panes = layout::navigation_ids(root).len();
+            let bordered = self.panes.len() > 1 || (view.zoomed.is_some() && tab_panes > 1);
+            for pane in &mut self.panes {
+                pane.bordered = bordered;
+            }
         }
+        for pane in &mut self.panes {
+            let alternate = self
+                .surfaces
+                .get(&pane.id)
+                .is_some_and(|s| s.vt.alt_screen());
+            let (content, scrollbar) = shell::panes::terminal_rect(
+                shell::panes::inner(pane.area, pane.bordered),
+                alternate,
+            );
+            pane.content = content;
+            pane.scrollbar = scrollbar;
+        }
+    }
+    fn refresh_snapshot(&mut self) {
+        let doc = self.document();
+        let view = self.view();
+        self.snapshot = snapshot::build(&snapshot::Sources {
+            document: doc.as_ref().map(|d| d.value()),
+            view: &view,
+            machine: &self.machine,
+            terminals: &self.session.terminals,
+            attention: &self.attention,
+            sequences: &self.sequences,
+            git: &self.git,
+            peek: self.peek.as_deref(),
+        });
+    }
+    /// Asks git about each space's folder on its machine, at most every few seconds per folder.
+    async fn refresh_git(&mut self) -> bool {
+        let folders: HashSet<String> = self
+            .snapshot
+            .workspaces
+            .iter()
+            .map(|w| w.cwd.clone())
+            .filter(|cwd| !cwd.is_empty())
+            .collect();
+        self.git.retain(|cwd, _| folders.contains(cwd));
+        self.git_checked.retain(|cwd, _| folders.contains(cwd));
+        let git = herdr_client_lib::worktrees::Git {
+            client: self.session.client.clone(),
+            machine: self.machine.clone(),
+            deadline: TIME,
+        };
+        let mut changed = false;
+        for cwd in folders {
+            if self
+                .git_checked
+                .get(&cwd)
+                .is_some_and(|at| at.elapsed() < GIT_REFRESH)
+            {
+                continue;
+            }
+            self.git_checked.insert(cwd.clone(), Instant::now());
+            let info = git_info(&git, &cwd).await;
+            if self.git.get(&cwd) != info.as_ref() {
+                changed = true;
+                match info {
+                    Some(info) => self.git.insert(cwd, info),
+                    None => self.git.remove(&cwd),
+                };
+            }
+        }
+        changed
+    }
+    fn invalidate_git(&mut self) {
+        self.git_checked.clear();
     }
     async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
         let visible: Vec<_> = self
@@ -237,7 +362,7 @@ impl Workspace {
         for (id, surface) in &mut self.surfaces {
             if !visible.contains(id) {
                 surface.stream = None;
-                surface.retry_at = std::time::Instant::now();
+                surface.retry_at = Instant::now();
             }
         }
         if self.surfaces.len() > 32 {
@@ -247,7 +372,7 @@ impl Workspace {
             let Some(local) = &pane.terminal else {
                 continue;
             };
-            let area = inner(pane.area);
+            let area = pane.content;
             if area.is_empty() {
                 continue;
             }
@@ -262,7 +387,7 @@ impl Workspace {
                 .entry(pane.id.clone())
                 .or_insert_with(|| Surface {
                     ended: false,
-                    retry_at: std::time::Instant::now(),
+                    retry_at: Instant::now(),
                     address: address.clone(),
                     stream: None,
                     vt: Vt::new(wanted.0, wanted.1),
@@ -277,13 +402,10 @@ impl Workspace {
                 surface.copy = None;
             }
             if surface.stream.is_none() {
-                if surface.ended {
+                if surface.ended || Instant::now() < surface.retry_at {
                     continue;
                 }
-                if std::time::Instant::now() < surface.retry_at {
-                    continue;
-                }
-                surface.retry_at = std::time::Instant::now() + Duration::from_secs(2);
+                surface.retry_at = Instant::now() + Duration::from_secs(2);
                 let finished =
                     self.session.terminals.values().any(|record| {
                         record["address"] == address && record["state"] == "finished"
@@ -307,7 +429,7 @@ impl Workspace {
                             surface.ended = true;
                             surface.error = None;
                         }
-                        Err(error) => surface.error = Some(error.to_string()),
+                        Err(error) => surface.error = Some(describe(&error)),
                     }
                     continue;
                 }
@@ -319,7 +441,7 @@ impl Workspace {
                         surface.error = None;
                         surface.wanted = wanted;
                     }
-                    Err(error) => {surface.error = Some(error.to_string());continue;}
+                    Err(error) => {surface.error = Some(describe(&error));continue;}
                 }
             }
             if surface.wanted != wanted || activate {
@@ -339,7 +461,17 @@ impl Workspace {
             .map(|a| format!("@{a}"))
             .or(self.view().focused)
     }
-    async fn command(&mut self, command: &str, args: Value) -> Result<()> {
+    /// Runs a shared or private command and reports failures as a toast.
+    async fn run(&mut self, command: &str, args: Value) -> Option<Value> {
+        match self.command(command, args).await {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.toast(describe(&*error), true);
+                None
+            }
+        }
+    }
+    async fn command(&mut self, command: &str, args: Value) -> Result<Value> {
         if matches!(command, "pane.focus" | "tab.focus" | "space.focus") {
             let id = args["id"].as_str().ok_or("id is required")?;
             let doc = self.document().ok_or("Document unavailable")?;
@@ -351,7 +483,7 @@ impl Workspace {
             }
             .ok_or("Target has no pane")?;
             self.focus(pane);
-            return Ok(());
+            return Ok(json!({"ok":true}));
         }
         if matches!(command, "agent.focus" | "terminal.focus") {
             let address = args["terminal"].as_str().ok_or("terminal is required")?;
@@ -364,7 +496,7 @@ impl Workspace {
                 return Err("Terminal unavailable".into());
             }
             self.focus_agent(address);
-            return Ok(());
+            return Ok(json!({"ok":true}));
         }
         if command == "machine" {
             self.machine = args["machine"].as_str().unwrap_or("").into();
@@ -372,232 +504,28 @@ impl Workspace {
                 self.session.refresh(&self.machine).await;
             }
             self.peek = None;
+            self.invalidate_git();
             self.reconcile();
-            return Ok(());
-        }
-        if command == "search" {
-            if let Some(id) = self.active_id()
-                && let Some(surface) = self.surfaces.get_mut(&id)
-            {
-                if let Some(copy) = crate::copy::search_history(
-                    &mut surface.vt,
-                    args["query"].as_str().unwrap_or(""),
-                ) {
-                    surface.copy = Some(copy);
-                } else {
-                    self.notice = "No match in retained history".into();
-                }
-            }
-            return Ok(());
+            return Ok(json!({"ok":true}));
         }
         self.check_pane_action(command)?;
         let mut view = self.view();
-        let result = actions::execute(
-            &mut self.session,
-            &self.machine,
-            &mut view,
-            command,
-            args.clone(),
-        )
-        .await?;
+        let result =
+            actions::execute(&mut self.session, &self.machine, &mut view, command, args).await?;
         self.views.insert(self.view_id(), view);
         self.reconcile();
-        if result.get("confirmation").is_some() {
-            let mut args = args;
-            args["expected"] = result.clone();
-            self.dialog = Some(Dialog::Confirm {
-                command: command.into(),
-                args,
-                description: serde_json::to_string_pretty(&result)?,
-            });
-        } else {
-            if result["ok"] == false
-                || matches!(command, "worktree.list" | "worktree.branches" | "help")
-            {
-                self.dialog = Some(Dialog::Message(serde_json::to_string_pretty(&result)?));
-            } else {
-                self.notice = result.to_string();
-            }
+        self.chrome.reveal_focused_tab = true;
+        self.chrome.reveal_focused_workspace = true;
+        if result["ok"] == false {
+            let message = result["error"]
+                .as_str()
+                .or_else(|| result["workspace"]["error"].as_str())
+                .or_else(|| result["failure"]["error"].as_str())
+                .or_else(|| result["git"]["stderr"].as_str().filter(|s| !s.is_empty()))
+                .map_or_else(|| format!("{command} did not complete"), str::to_owned);
+            return Err(message.trim().to_owned().into());
         }
-        Ok(())
-    }
-    async fn action(&mut self, action: &str) -> Result<()> {
-        self.check_pane_action(action)?;
-        match action {
-            "menu" => self.dialog = Some(Dialog::Menu { selected: 0 }),
-            "help" => {
-                self.dialog = Some(Dialog::Message(format!(
-                    "Ctrl+B then:\ns: space   t: tab   %: horizontal split   \": vertical split\np: next pane   n: next tab   z: zoom   r: rename   x: close\n[: copy mode   :: command   w: new worktree\nCopy: arrows/hjkl move, Space anchors, y copies, / searches, n repeats, Esc exits.\nPageUp/PageDown scroll history. Shift+drag selects.\nClick spaces, tabs and terminals to navigate. Ctrl+B e cycles live terminals. Alt+wheel cycles all panes, including hidden stack panes.\nConfig: {}\n\n{}",
-                    preferences::config_path().display(),
-                    actions::HELP
-                )))
-            }
-            "zoom" => {
-                let view = self.view_mut();
-                view.zoomed = if view.zoomed.is_some() {
-                    None
-                } else {
-                    view.focused.clone()
-                };
-            }
-            "agent.next" | "terminal.next" => {
-                let agents: Vec<_> = self
-                    .session
-                    .terminals
-                    .values()
-                    .filter(|r| {
-                        if action == "terminal.next" {
-                            r["state"] == "live"
-                        } else {
-                            r["reported"] == true || !r["status"].is_null()
-                        }
-                    })
-                    .filter_map(|r| r["address"].as_str())
-                    .collect();
-                let active = self
-                    .active_id()
-                    .and_then(|id| self.surfaces.get(&id))
-                    .map(|s| s.address.as_str());
-                let current = self.peek.as_deref().or(active);
-                let index = agents
-                    .iter()
-                    .position(|a| Some(*a) == current)
-                    .map_or(0, |i| (i + 1) % agents.len().max(1));
-                if let Some(address) = agents.get(index).map(|s| s.to_string()) {
-                    self.focus_agent(&address);
-                }
-            }
-            "space.next" => {
-                if let Some(doc) = self.document()
-                    && let Some(spaces) = doc.value()["spaces"].as_array()
-                {
-                    let view = self.view();
-                    let index = spaces
-                        .iter()
-                        .position(|s| s["id"].as_str() == view.active_space.as_deref())
-                        .unwrap_or(0);
-                    if let Some(id) = spaces
-                        .get((index + 1) % spaces.len().max(1))
-                        .and_then(|s| s["id"].as_str())
-                        .and_then(|id| remembered_pane(&view, &doc, id))
-                    {
-                        self.focus(id);
-                    }
-                }
-            }
-            "pane.left" | "pane.right" | "pane.up" | "pane.down" => {
-                if let Some(current) = self
-                    .active_id()
-                    .and_then(|id| self.panes.iter().find(|p| p.id == id))
-                {
-                    let center = |p: &Pane| {
-                        (
-                            i32::from(p.area.x) + i32::from(p.area.width) / 2,
-                            i32::from(p.area.y) + i32::from(p.area.height) / 2,
-                        )
-                    };
-                    let (x, y) = center(current);
-                    let chosen = self
-                        .panes
-                        .iter()
-                        .filter(|p| p.id != current.id)
-                        .filter(|p| {
-                            let (px, py) = center(p);
-                            match action {
-                                "pane.left" => px < x,
-                                "pane.right" => px > x,
-                                "pane.up" => py < y,
-                                _ => py > y,
-                            }
-                        })
-                        .min_by_key(|p| {
-                            let (px, py) = center(p);
-                            (px - x).abs() + (py - y).abs()
-                        })
-                        .map(|p| p.id.clone());
-                    if let Some(id) = chosen {
-                        self.focus(&id);
-                    }
-                }
-            }
-            "pane.next" | "pane.previous" => {
-                let view = self.view();
-                if let Some(doc) = self.document()
-                    && let Some(tab) = view.active_tab.as_deref().and_then(|id| doc.node(id))
-                {
-                    let ids = layout::navigation_ids(&tab["root"]);
-                    if !ids.is_empty() {
-                        let index = ids
-                            .iter()
-                            .position(|id| Some(id) == view.focused.as_ref())
-                            .unwrap_or(0);
-                        let step = if action == "pane.previous" {
-                            ids.len() - 1
-                        } else {
-                            1
-                        };
-                        self.focus(&ids[(index + step) % ids.len()]);
-                    }
-                }
-            }
-            "tab.next" => {
-                let view = self.view();
-                if let Some(doc) = self.document()
-                    && let Some(tabs) = view
-                        .active_space
-                        .as_deref()
-                        .and_then(|id| doc.node(id))
-                        .and_then(|s| s["tabs"].as_array())
-                {
-                    let index = tabs
-                        .iter()
-                        .position(|t| t["id"].as_str() == view.active_tab.as_deref())
-                        .unwrap_or(0);
-                    if let Some(id) = tabs
-                        .get((index + 1) % tabs.len().max(1))
-                        .and_then(|t| t["id"].as_str())
-                        .and_then(|id| remembered_pane(&view, &doc, id))
-                    {
-                        self.focus(id);
-                    }
-                }
-            }
-            "copy" => {
-                if let Some(id) = self.active_id()
-                    && let Some(surface) = self.surfaces.get_mut(&id)
-                {
-                    surface.copy = Some(Copy::new(surface.vt.frame()));
-                }
-            }
-            "pane.close" | "space.close" | "tab.close" | "terminal.park" => {
-                self.command(action, json!({})).await?
-            }
-            _ => {
-                let (command, mut defaults) = match action {
-                    "split.row" => ("pane.split", json!({"axis":"row"})),
-                    "split.column" => ("pane.split", json!({"axis":"column"})),
-                    _ => (action, json!({})),
-                };
-                let view = self.view();
-                if matches!(
-                    command,
-                    "pane.rename" | "pane.resize" | "pane.move" | "pane.swap" | "pane.split"
-                ) {
-                    defaults["id"] = json!(view.focused);
-                }
-                if command == "tab.rename" || command == "tab.move" {
-                    defaults["id"] = json!(view.active_tab);
-                }
-                if command == "space.rename" || command == "space.move" {
-                    defaults["id"] = json!(view.active_space);
-                }
-                if command == "tab.new" {
-                    defaults["space"] = json!(view.active_space);
-                }
-                self.dialog = Some(Dialog::Form(Form::new(command, &defaults)));
-            }
-        }
-        Ok(())
+        Ok(result)
     }
     fn notification(&mut self, value: &Value) {
         let event = &value["params"];
@@ -620,9 +548,104 @@ impl Workspace {
                 surface.stream = None;
             }
         }
+        if matches!(event["type"].as_str(), Some("turn")) {
+            self.invalidate_git();
+        }
         self.reconcile();
     }
+    fn save_chrome(&mut self) {
+        self.chrome_saved.sidebar_width = Some(self.sidebar_width);
+        self.chrome_saved.sidebar_collapsed = self.sidebar_collapsed;
+        self.chrome_saved.sidebar_section_split = self.chrome.section_split;
+        self.chrome_saved.agent_panel_sort = Some(
+            match self.config.sort {
+                shell::Sort::Spaces => "spaces",
+                shell::Sort::Priority => "priority",
+            }
+            .into(),
+        );
+        self.chrome_saved.collapsed_groups = self.chrome.collapsed_groups.iter().cloned().collect();
+        if let Err(error) = preferences::save_chrome(&self.view_key, &self.chrome_saved) {
+            self.toast(error.to_string(), true);
+        }
+    }
+    fn reload_config(&mut self) -> Result<()> {
+        self.preferences = preferences::load()?;
+        let sort = self.config.sort;
+        self.config = self.preferences.shell();
+        if self.chrome_saved.agent_panel_sort.is_some() {
+            self.config.sort = sort;
+        }
+        self.keys = Keymap::new(&self.preferences.keys);
+        Ok(())
+    }
 }
+
+/// A person-facing sentence for an error, without the library's variant wrapper.
+fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    use herdr_client_lib::client::Error as Core;
+    match error.downcast_ref::<Core>() {
+        Some(Core::Io(text) | Core::Protocol(text)) => text.clone(),
+        Some(Core::Rpc(value)) => value["message"]
+            .as_str()
+            .map_or_else(|| value.to_string(), str::to_owned),
+        Some(Core::Timeout) => "core did not answer in time".into(),
+        Some(Core::Disconnected) => "disconnected from core".into(),
+        Some(Core::SlowConsumer) => "terminal output fell behind".into(),
+        None => error.to_string(),
+    }
+}
+
+/// Branch, checkout, and worktree identity for one folder, read with argv-based git.
+async fn git_info(git: &herdr_client_lib::worktrees::Git, cwd: &str) -> Option<GitInfo> {
+    let output = git
+        .run(
+            cwd,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+                "--git-common-dir",
+                "--absolute-git-dir",
+                "--abbrev-ref",
+                "HEAD",
+            ],
+        )
+        .await
+        .ok()?;
+    if output.code != Some(0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = text.lines().collect();
+    let [top, common, dir, head] = lines.as_slice() else {
+        return None;
+    };
+    let mut info = GitInfo {
+        top: (*top).into(),
+        branch: (*head != "HEAD").then(|| (*head).to_owned()),
+        common_dir: common.trim_end_matches('/').into(),
+        linked: dir.trim_end_matches('/') != common.trim_end_matches('/'),
+        ahead_behind: None,
+    };
+    if info.branch.is_some()
+        && let Ok(counts) = git
+            .run(
+                cwd,
+                &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            )
+            .await
+        && counts.code == Some(0)
+    {
+        let text = String::from_utf8_lossy(&counts.stdout);
+        let mut numbers = text.split_whitespace().filter_map(|n| n.parse().ok());
+        if let (Some(ahead), Some(behind)) = (numbers.next(), numbers.next()) {
+            info.ahead_behind = Some((ahead, behind));
+        }
+    }
+    Some(info)
+}
+
 fn remembered_pane<'a>(
     view: &View,
     doc: &'a herdr_client_lib::document::Document,
@@ -680,13 +703,16 @@ fn identities(
     }
     result
 }
-fn inner(area: Rect) -> Rect {
-    Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    )
+fn machine_names(machines: &Value) -> Vec<String> {
+    let mut names = vec![String::new()];
+    names.extend(
+        machines["machines"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["name"].as_str().map(str::to_owned)),
+    );
+    names
 }
 fn size(record: &Value, fallback: (u16, u16)) -> (u16, u16) {
     (
@@ -727,41 +753,72 @@ pub async fn run(
     let view_key = format!("{}:{instance}", config.session);
     let client = config.connect(TIME).await?;
     let machine_list = client.call("machine.list", json!({}), TIME).await?;
-    let mut machines = vec![String::new()];
-    machines.extend(
-        machine_list["machines"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m["name"].as_str().map(str::to_owned)),
-    );
+    let machines = machine_names(&machine_list);
     let identities = identities(&client, &machine_list);
-    let session = Session::connect(client, machines, TIME).await?;
+    let session = Session::connect(client, machines.clone(), TIME).await?;
+    let preferences = preferences::load()?;
+    let chrome_saved = preferences::read_chrome(&view_key);
+    let mut shell_config = preferences.shell();
+    if let Some(sort) = &chrome_saved.agent_panel_sort {
+        shell_config.sort = if sort == "priority" {
+            shell::Sort::Priority
+        } else {
+            shell::Sort::Spaces
+        };
+    }
     let mut app = Workspace {
-        session_name: config.session.clone(),
+        view_key: view_key.clone(),
         identities,
         renders: 0,
         parsed_bytes: 0,
         attention: Default::default(),
+        sequences: BTreeMap::new(),
+        words: BTreeMap::new(),
+        sequence: 0,
         drag: None,
         session,
         views: preferences::read_views(&view_key),
         machine: initial_machine,
+        machines,
         surfaces: BTreeMap::new(),
         panes: vec![],
-        hits: vec![],
-        preferences: preferences::load()?,
-        dialog: None,
-        prefix: false,
+        hits: Hits::default(),
+        overlay: None,
+        overlay_render: OverlayRender::default(),
+        mode: Mode::Terminal,
+        chrome: ChromeState {
+            section_split: chrome_saved.sidebar_section_split,
+            collapsed_groups: chrome_saved.collapsed_groups.iter().cloned().collect(),
+            reveal_focused_tab: true,
+            reveal_focused_workspace: true,
+            ..ChromeState::default()
+        },
+        sidebar_width: chrome_saved
+            .sidebar_width
+            .unwrap_or(preferences.sidebar_width),
+        sidebar_collapsed: chrome_saved.sidebar_collapsed,
+        chrome_saved,
+        config: shell_config,
+        keys: Keymap::new(&preferences.keys),
+        preferences,
+        layout: shell::Layout::default(),
+        snapshot: Snapshot::default(),
+        git: HashMap::new(),
+        git_checked: HashMap::new(),
         focused: true,
         peek: None,
-        notice: format!("Instance {instance} · Ctrl+B commands · Ctrl+Q quit"),
+        previous_pane: None,
+        copy_search: None,
+        notice: format!("Instance {instance}"),
+        toast: None,
     };
     if !app.session.documents.contains_key(&app.machine) {
         app.session.refresh(&app.machine).await;
     }
     app.recover_placements().await;
     app.reconcile();
+    app.refresh_snapshot();
+    app.refresh_git().await;
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         crate::restore();
@@ -784,9 +841,10 @@ pub async fn run(
             let area = screen.size()?;
             app.geometry(Rect::new(0, 0, area.width, area.height));
             if connected && let Err(e) = app.sync_surfaces(activate_layout).await {
-                app.notice = e.to_string();
+                app.toast(e.to_string(), true);
             }
             activate_layout = false;
+            app.refresh_snapshot();
             app.draw(&mut screen)?;
             dirty = false;
             render_due = false;
@@ -820,11 +878,15 @@ pub async fn run(
                     Ok(json!({"ok":true}))
                 } else {
                     let result = match request.command.as_str() {
-                        "zoom" => app.action("zoom").await,
-                        "pane.focus" | "tab.focus" | "space.focus" | "agent.focus"
-                        | "terminal.focus" | "machine" => {
-                            app.command(&request.command, request.args).await
+                        "zoom" => {
+                            app.toggle_zoom();
+                            Ok(())
                         }
+                        "pane.focus" | "tab.focus" | "space.focus" | "agent.focus"
+                        | "terminal.focus" | "machine" => app
+                            .command(&request.command, request.args)
+                            .await
+                            .map(|_| ()),
                         _ => Err(
                             "Only private view commands are accepted; use do for shared operations"
                                 .into(),
@@ -854,15 +916,16 @@ pub async fn run(
                 match app.host(event).await {
                     Ok(true) => break,
                     Ok(false) => {}
-                    Err(e) => app.dialog = Some(Dialog::Message(e.to_string())),
+                    Err(e) => app.toast(e.to_string(), true),
                 }
                 if old != app.active_id() && activate {
-                    app.geometry(Rect::new(0, 0, screen.size()?.width, screen.size()?.height));
+                    let size = screen.size()?;
+                    app.geometry(Rect::new(0, 0, size.width, size.height));
                     if let Err(e) = app.sync_surfaces(true).await {
-                        app.notice = e.to_string();
+                        app.toast(e.to_string(), true);
                     }
                     if let Err(e) = app.activate().await {
-                        app.notice = e.to_string();
+                        app.toast(e.to_string(), true);
                     }
                 }
                 dirty = true;
@@ -870,7 +933,9 @@ pub async fn run(
             Next::Output(id, Ok(Some(StreamEvent::Data(bytes)))) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     app.parsed_bytes += bytes.len() as u64;
+                    let alternate = surface.vt.alt_screen();
                     surface.vt.write(&bytes);
+                    activate_layout |= alternate != surface.vt.alt_screen();
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
                     {
@@ -899,7 +964,7 @@ pub async fn run(
                 if value["method"] == "missed"
                     && let Err(e) = app.refresh_identities().await
                 {
-                    app.notice = e.to_string();
+                    app.toast(e.to_string(), true);
                 }
                 if value["method"] != "heartbeat" {
                     app.notification(&value);
@@ -907,7 +972,7 @@ pub async fn run(
                 }
             }
             Next::Update(Err(e)) => {
-                app.notice = format!("Disconnected: {e}; reconnecting");
+                app.toast(format!("Disconnected: {e}; reconnecting"), true);
                 connected = false;
                 for surface in app.surfaces.values_mut() {
                     surface.stream = None;
@@ -915,8 +980,18 @@ pub async fn run(
                 dirty = true;
             }
             Next::Retry => {
+                if app
+                    .toast
+                    .as_ref()
+                    .is_some_and(|t| Instant::now() >= t.until)
+                {
+                    app.toast = None;
+                    dirty = true;
+                }
                 if connected {
                     dirty |= app.recover_placements().await;
+                    app.refresh_snapshot();
+                    dirty |= app.refresh_git().await;
                 }
                 if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
                     match app.refresh_identities().await {
@@ -926,7 +1001,7 @@ pub async fn run(
                                 app.reconcile();
                             }
                         }
-                        Err(error) => app.notice = error.to_string(),
+                        Err(error) => app.toast(describe(&*error), true),
                     }
                 }
                 if !connected {
@@ -935,15 +1010,15 @@ pub async fn run(
                             Ok(()) => {
                                 connected = true;
                                 if let Err(e) = app.refresh_identities().await {
-                                    app.notice = e.to_string();
+                                    app.toast(e.to_string(), true);
                                 }
-                                app.notice = "Reconnected".into();
+                                app.toast("Reconnected", false);
                                 app.reconcile();
                                 dirty = true;
                             }
-                            Err(e) => app.notice = e.to_string(),
+                            Err(e) => app.toast(e.to_string(), true),
                         },
-                        Err(e) => app.notice = e.to_string(),
+                        Err(e) => app.toast(e.to_string(), true),
                     }
                 } else if app.panes.iter().any(|p| {
                     app.surfaces
@@ -956,6 +1031,7 @@ pub async fn run(
         }
     }
     preferences::save_views(&view_key, &app.views)?;
+    app.save_chrome();
     Ok(())
 }
 #[cfg(test)]

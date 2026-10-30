@@ -1,4 +1,4 @@
-"""Use hc session defaults and discover terminals without agent reports."""
+"""Use hc session defaults and reach terminals without agent reports from Go to."""
 import fcntl
 import json
 import os
@@ -51,10 +51,12 @@ for session, inherited, flags in (
             return json.loads(subprocess.check_output([str(binary), *flags, "--instance", "discovery", "view", command, json.dumps(args or {})], env=env, timeout=5))
 
         output = wait_for(b"PLACED_TERMINAL")
-        assert b"Terminals" in output and loose["address"].encode() in output and b"live" in output, output[-2000:]
-        assert session.encode() in output
+        assert b"spaces" in output and b"agents" in output, output[-2000:]
+        assert view("state")["session"] == session
         assert view("state")["view"]["focused"] == "pane"
-        os.write(master, b"\x02e")
+        os.write(master, b"\x02g")
+        wait_for(b"no pane")
+        os.write(master, b"/" + loose["address"].encode() + b"\r")
         wait_for(b"UNPLACED_TERMINAL")
         assert view("state")["panes"][0]["terminal"] == loose["address"]
         assert core.rpc("doc.get", {"name": "herdr-app"}) == before

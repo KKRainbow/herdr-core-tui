@@ -3,18 +3,13 @@ use serde_json::Value;
 #[derive(Clone, Debug)]
 pub struct Pane {
     pub id: String,
-    pub name: Option<String>,
     pub terminal: Option<String>,
     pub description: String,
     pub area: Rect,
-}
-impl Pane {
-    pub fn title(&self) -> &str {
-        self.name
-            .as_deref()
-            .or(self.terminal.as_deref())
-            .unwrap_or(&self.description)
-    }
+    /// The terminal's cells inside the frame, after borders and the scrollbar gutter.
+    pub content: Rect,
+    pub bordered: bool,
+    pub scrollbar: Option<Rect>,
 }
 pub fn panes(root: &Value, area: Rect, focused: Option<&str>, zoomed: Option<&str>) -> Vec<Pane> {
     let mut result = vec![];
@@ -77,16 +72,15 @@ fn collect(
     let Some(children) = node["children"].as_array() else {
         result.push(Pane {
             id: node["id"].as_str().unwrap_or("unknown").into(),
-            name: node["name"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
             terminal: node["content"]["terminal"].as_str().map(str::to_owned),
             description: node["content"]["mod"]
                 .as_str()
                 .unwrap_or("Unsupported pane")
                 .into(),
             area,
+            content: area,
+            bordered: false,
+            scrollbar: None,
         });
         return;
     };

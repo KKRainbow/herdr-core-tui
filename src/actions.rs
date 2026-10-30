@@ -85,7 +85,7 @@ pub async fn execute(
     let kind = command.split('.').next().unwrap_or("");
     if matches!(command, "space.rename" | "tab.rename" | "pane.rename") {
         let id = target(&args, view, kind)?;
-        let name = required(&args, "name")?;
+        let name = text(&args, "name").ok_or("name is required")?;
         return written(session.edit(machine, |d| d.rename(&id, name)).await?);
     }
     if matches!(command, "space.move" | "tab.move") {
@@ -144,10 +144,7 @@ pub async fn execute(
     let placement = match command {
         "space.new" | "worktree.new" | "worktree.open" => Some(Placement::Space {
             id: id("sp"),
-            name: text(&args, "name")
-                .or_else(|| text(&args, "branch"))
-                .unwrap_or("Workspace")
-                .into(),
+            name: text(&args, "name").unwrap_or("").into(),
             tab: id("tb"),
             pane: pane.clone(),
         }),
@@ -157,7 +154,7 @@ pub async fn execute(
                 .or_else(|| view.active_space.clone())
                 .ok_or("Select a space first")?,
             id: id("tb"),
-            name: text(&args, "name").unwrap_or("Terminal").into(),
+            name: text(&args, "name").unwrap_or("").into(),
             pane: pane.clone(),
         }),
         "pane.split" => {

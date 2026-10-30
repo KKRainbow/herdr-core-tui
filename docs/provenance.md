@@ -10,6 +10,11 @@ No original source checkout is modified.
 The workspace editor adapts Herdr `src/client/shell/text_editor.rs` at `ee5bfb5041bb3e4a49d591c72308aae3c81ecdde`.
 The sidebar, pane navigation, and selection interactions reference that revision's `src/ui/sidebar.rs`, `src/client/shell/workspace_navigation.rs`, and `src/selection.rs`.
 The new interface uses library documents and private views instead of the original server snapshots.
-The spaces footer and new-tab control adapt the layout and hit targets in Herdr `src/client/shell/sidebar.rs` and `src/client/shell/tabs.rs` at the same revision.
+`src/shell` adapts Herdr's client shell at that revision.
+The palette comes from `src/app/state.rs`; the keymap and keybind help from `src/config/model.rs` and `src/input/keybind_help.rs`.
+The sidebar, agents panel, tab bar, mode bar, and list scrolling adapt `src/client/shell/{sidebar,agent_sidebar,tabs,render,scroll}.rs` and `src/ui/sidebar*.rs`.
+Menus, prompts, keybind help, the navigator, and worktree dialogs adapt `src/client/shell/{overlays,worktree_overlays,context_menu,global_menu,aggregate_navigation}.rs`.
+Pane borders, titles, scrollbars, and selection colors adapt `src/ui/panes.rs` and `src/ui/scrollbar.rs`.
+Mode and overlay input adapt `src/client/shell/{input,overlay_input,mouse,actions}.rs`.
 Kitty image extraction, PNG decoding, and hyperlink lookup adapt the pinned app's `src/vt.rs`.
 Images use clipped half-block cells rather than app GPU textures.

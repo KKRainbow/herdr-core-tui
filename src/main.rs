@@ -3,12 +3,12 @@ mod cli;
 mod connection;
 mod control;
 mod copy;
-mod dialog;
 mod editor;
 mod input;
 mod layout;
 mod paint;
 mod preferences;
+mod shell;
 mod vt;
 mod workspace;
 use crossterm::{

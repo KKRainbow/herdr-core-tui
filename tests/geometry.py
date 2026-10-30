@@ -25,13 +25,14 @@ try:
  first=launch(100,24,["--instance","workspace"])
  def size():
   record=core.rpc("terminal.get",{"terminal":address});return record["cols"],record["rows"]
- until(lambda:size()==(74,20))
+ until(lambda:size()==(73,23))
  second=launch(60,16,[address]);until(lambda:size()==(60,16))
  for _ in range(25):assert size()==(60,16),size();time.sleep(.1)
- os.write(first,b"a");until(lambda:size()==(74,20))
- for _ in range(25):assert size()==(74,20),size();time.sleep(.1)
+ os.write(first,b"a");until(lambda:size()==(73,23))
+ for _ in range(25):assert size()==(73,23),size();time.sleep(.1)
  os.write(second,b"b");until(lambda:size()==(60,16))
- for process,master,_,_ in viewers:os.write(master,b"\x11");assert process.wait(timeout=5)==0
+ os.write(first,b"\x02q");os.write(second,b"\x11")
+ for process,_,_,_ in viewers:assert process.wait(timeout=5)==0
  assert core.rpc("terminal.get",{"terminal":address})["state"]=="live"
  print("PASS: two different view sizes, input transfers ownership, no background resize contention, detach keeps process")
 finally:

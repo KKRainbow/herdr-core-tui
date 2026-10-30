@@ -23,6 +23,8 @@ pub struct Cell {
     pub underline: bool,
     pub strike: bool,
     pub wide: bool,
+    /// The foreground is the terminal's default, drawn in the host's own color.
+    pub default_fg: bool,
 }
 
 #[derive(Clone)]
@@ -539,12 +541,12 @@ impl Vt {
             );
 
             let mut fg = GhosttyColorRgb::default();
-            let fg = if ghostty_render_state_row_cells_get(
+            let explicit_fg = ghostty_render_state_row_cells_get(
                 c,
                 GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
                 &mut fg as *mut _ as *mut c_void,
-            ) == GHOSTTY_SUCCESS
-            {
+            ) == GHOSTTY_SUCCESS;
+            let fg = if explicit_fg {
                 Rgb::from(fg)
             } else {
                 fg_default
@@ -595,6 +597,7 @@ impl Vt {
                 underline: style.underline != 0,
                 strike: style.strikethrough,
                 wide: wide == GHOSTTY_CELL_WIDE_WIDE,
+                default_fg: !explicit_fg && !style.inverse,
             }
         }
     }

@@ -23,26 +23,24 @@ def until(predicate):
   if predicate():return
  raise AssertionError("app did not reflect TUI change")
 try:
- assert b"Ctrl+B" in drain(1)
- send(b"\x02t")
- send(name.encode()+b"\tprintf WORKSPACE_TEST; cat\r")
+ assert b"agents" in drain(1)
+ send(b"\x02c")
+ send(name.encode()+b"\r")
  until(lambda:any(t["name"]==name for s in app()["spaces"]for t in s["tabs"]))
  assert active()==before,"TUI changed app tab focus"
  tab=next(t for s in app()["spaces"]for t in s["tabs"]if t["name"]==name)
- # Open the pane context menu and select Rename tab with the mouse.
- send(b'\x1b[<2;40;10M')
- send(b'\x1b[<0;20;15M')
- send((name+" renamed").encode()+b'\r')
+ # Open the tab context menu with the mouse and choose Rename.
+ send(b'\x1b[<2;30;1M')
+ send(b'j\r')
+ send(b'\x03'+(name+" renamed").encode()+b'\r')
  until(lambda:any(t["name"]==name+" renamed" for s in app()["spaces"]for t in s["tabs"]))
- send(b'\x02%')
- send(b'\tprintf SPLIT_TEST; cat\r')
+ send(b'\x02v')
  until(lambda:any(len(t["terminals"])==2 for s in app()["spaces"]for t in s["tabs"]if t["id"]==tab["id"]))
  send(b'\x02z')
  assert active()==before,"TUI zoom changed app focus"
  send(b'\x02x')
- send(b'y')
  until(lambda:any(len(t["terminals"])==1 for s in app()["spaces"]for t in s["tabs"]if t["id"]==tab["id"]))
- send(b'\x11');assert p.wait(timeout=5)==0
+ send(b'\x02q');assert p.wait(timeout=5)==0
  assert termios.tcgetattr(slave)==original
  assert active()==before
  print("PASS: TUI tab creation, split, close, independent app focus/zoom, host restore")

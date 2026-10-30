@@ -53,3 +53,6 @@ profile: release
 
 compatibility-integration: release
     python3 tests/compatibility.py
+
+package-check:
+    python3 scripts/check-package.py

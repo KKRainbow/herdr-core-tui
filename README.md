@@ -116,6 +116,7 @@ Run `just install /chosen/prefix` to build an optimized binary and install it un
 This does not replace the installed app or core.
 Run `just package /path/herder-tui-source.tar.gz` to export the staged source tree with pinned Ghostty and library sources.
 The source bundle needs no sibling checkout and already includes its submodules.
+Run `just package-check` to export the staged source, verify its library path, and build and test it in a temporary directory.
 `distribution/client-revision` selects the library revision; `SOURCE-REVISIONS` records the bundle inputs.
 The development checkout keeps its sibling path dependency.
 Nothing is published or pushed by these recipes.

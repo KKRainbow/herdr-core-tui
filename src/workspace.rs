@@ -738,6 +738,7 @@ pub async fn run(
     if !app.session.documents.contains_key(&app.machine) {
         app.session.refresh(&app.machine).await;
     }
+    app.session.reconcile_placements().await?;
     app.reconcile();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -891,6 +892,16 @@ pub async fn run(
                 dirty = true;
             }
             Next::Retry => {
+                if connected {
+                    match app.session.reconcile_placements().await {
+                        Ok(outcomes) if !outcomes.is_empty() => {
+                            app.reconcile();
+                            dirty = true;
+                        }
+                        Err(e) => app.notice = e.to_string(),
+                        _ => {}
+                    }
+                }
                 if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
                     match app.refresh_identities().await {
                         Ok(changed) => {

@@ -94,6 +94,8 @@ pub struct Workspace {
     renders: u64,
     parsed_bytes: u64,
     attention: herdr_client_lib::view::Attention,
+    /// The attention last written to the state file, to save only changes.
+    attention_saved: String,
     listed_once: bool,
     drag: Option<Drag>,
     pub session: Session,
@@ -235,8 +237,16 @@ impl Workspace {
         }
         self.listed_once = true;
         self.attention.mark_seen(&looked_at);
+        // Keep what this viewer saw on machines whose terminals are not loaded now.
+        let loaded: HashSet<&String> = self
+            .identities
+            .iter()
+            .filter(|(machine, _)| self.session.document(machine).is_ok())
+            .map(|(_, core)| core)
+            .collect();
         let terminals = &self.session.terminals;
-        self.attention.retain(|id| terminals.contains_key(id));
+        self.attention
+            .retain(|id| terminals.contains_key(id) || !loaded.contains(&id.core));
         if self.preferences.sound.enabled {
             for sound in sounds {
                 crate::sound::play(sound, self.preferences.sound.path(sound));
@@ -610,6 +620,17 @@ impl Workspace {
         }
         self.reconcile();
     }
+    fn save_attention(&mut self) {
+        let Ok(text) = serde_json::to_string(&self.attention) else {
+            return;
+        };
+        if text != self.attention_saved {
+            match preferences::save_attention(&self.view_key, &self.attention) {
+                Ok(()) => self.attention_saved = text,
+                Err(error) => self.toast(error.to_string(), true),
+            }
+        }
+    }
     fn save_chrome(&mut self) {
         self.chrome_saved.sidebar_width = Some(self.sidebar_width);
         self.chrome_saved.sidebar_collapsed = self.sidebar_collapsed;
@@ -771,7 +792,12 @@ pub async fn run(
         identities,
         renders: 0,
         parsed_bytes: 0,
-        attention: Default::default(),
+        attention: {
+            let mut attention = herdr_client_lib::view::Attention::default();
+            attention.restore(&preferences::read_attention(&view_key));
+            attention
+        },
+        attention_saved: String::new(),
         listed_once: false,
         drag: None,
         session,
@@ -1006,6 +1032,7 @@ pub async fn run(
                 if connected {
                     dirty |= app.recover_placements().await;
                 }
+                app.save_attention();
                 if connected && app.session.documents.keys().any(|name| !name.is_empty()) {
                     match app.refresh_identities().await {
                         Ok(changed) => {
@@ -1044,6 +1071,7 @@ pub async fn run(
         }
     }
     preferences::save_views(&view_key, &app.views)?;
+    app.save_attention();
     app.save_chrome();
     Ok(())
 }

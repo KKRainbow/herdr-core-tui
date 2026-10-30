@@ -30,6 +30,7 @@ Linked worktrees appear under their main checkout; click the arrow to collapse t
 The agents list shows terminals that report OSC 7501 status, including ones without a pane.
 Use the pane menu's `Move pane...` chooser to move a pane to a tab in any workspace on the current machine.
 Click `grouped` to sort agents by priority instead.
+A finish you did not watch stays marked done across restarts until you view it.
 Panes have borders only when a tab shows several; the focused pane's border uses the accent color.
 
 ## Controls

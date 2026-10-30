@@ -20,6 +20,7 @@ integration: build
     python3 tests/pane_move.py
     python3 tests/worktree_create.py
     python3 tests/worktree_remove.py
+    python3 tests/attention.py
 
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored

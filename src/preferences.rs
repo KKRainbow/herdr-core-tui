@@ -1,5 +1,5 @@
 use crate::Result;
-use herdr_client_lib::view::View;
+use herdr_client_lib::view::{Attention, View};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Serialize, Deserialize)]
@@ -151,6 +151,19 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(&temporary, bytes)?;
     std::fs::rename(temporary, path)?;
     Ok(())
+}
+/// Seen completions this viewer keeps between runs, like the app's saved attention.
+pub fn read_attention(session: &str) -> Attention {
+    std::fs::read(state_path("attention", session))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+pub fn save_attention(session: &str, attention: &Attention) -> Result<()> {
+    write_atomic(
+        &state_path("attention", session),
+        &serde_json::to_vec(attention)?,
+    )
 }
 pub fn read_views(session: &str) -> BTreeMap<String, View> {
     std::fs::read(view_path(session))

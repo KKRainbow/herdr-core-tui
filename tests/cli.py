@@ -2,7 +2,7 @@
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,tempfile,termios,time
 binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/debug/herder-tui")).resolve()
 with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
- env=dict(os.environ,HC_SESSION="tui-cli",XDG_RUNTIME_DIR=root+"/run",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",HERDR_APP_HOME=root+"/app",TERM="xterm-256color")
+ env=dict({k:v for k,v in os.environ.items() if k not in ("WAYLAND_DISPLAY","DISPLAY")},HC_SESSION="tui-cli",XDG_RUNTIME_DIR=root+"/run",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",HERDR_APP_HOME=root+"/app",TERM="xterm-256color")
  pathlib.Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
  def cli(*args):return json.loads(subprocess.check_output([str(binary),"--session",env["HC_SESSION"],*args],env=env,cwd=root,timeout=10))
  viewers=[]

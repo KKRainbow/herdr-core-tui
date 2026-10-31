@@ -86,14 +86,16 @@ Pane menus also park the terminal without ending it.
 Right-click an agent without a pane to keep it in a new tab.
 Shift+right-click sends the click to the program.
 Drag pane borders, the sidebar edge, or the line above the agents to resize.
-Drag in a pane to select text when the program does not use the mouse; release copies it with OSC 52.
+Drag in a pane to select text when the program does not use the mouse; dragging past an edge scrolls history, and release copies the selection.
+Double-click selects a word, URL, or path as Herdr does; triple-click selects the line.
 Shift+drag selects in programs that use the mouse.
 Ctrl+click opens an HTTP or HTTPS link with `xdg-open` on Linux.
 The mouse wheel scrolls history when the program does not use mouse reporting.
 
 In copy mode, use h/j/k/l and w/b/e to move, v or Space to select, and y or Enter to copy.
 Use PageUp and PageDown for history, / to search retained history, n to repeat, and q or Esc to leave.
-The host terminal must allow OSC 52 for clipboard writes.
+Copies go through `wl-copy`, `xclip`, `xsel`, or `pbcopy`, else OSC 52; over SSH, in VS Code, or in WSL, OSC 52 comes first.
+In a terminal on another machine, ctrl+v (`remote_image_paste`) or an empty paste sends the clipboard image there, and a pasted image file path sends that file; its path is pasted in.
 Paste through the host terminal's paste command.
 
 Closing a workspace asks for confirmation.

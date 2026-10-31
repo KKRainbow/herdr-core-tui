@@ -1,5 +1,6 @@
 mod actions;
 mod cli;
+mod clipboard;
 mod config_edit;
 mod connection;
 mod control;
@@ -15,6 +16,7 @@ mod shell;
 mod sound;
 mod vt;
 mod window_title;
+mod word;
 mod workspace;
 use crossterm::{
     cursor,

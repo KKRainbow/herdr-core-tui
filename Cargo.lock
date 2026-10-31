@@ -378,6 +378,7 @@ dependencies = [
  "futures-util",
  "ghostty-sys",
  "herdr-client-lib",
+ "libc",
  "png",
  "ratatui",
  "serde",

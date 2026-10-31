@@ -1,59 +1,58 @@
 use crate::vt::Frame;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use std::io::{self, Write};
-/// Frozen viewport selection follows Herdr's anchor/drag/retain interaction.
+use std::io;
+/// Selection over a frozen viewport that follows Herdr's anchor/drag/retain interaction.
+/// The anchor stays in history while the viewport scrolls, so a selection spans pages.
 pub struct Copy {
     pub frame: Frame,
-    pub anchor: (u16, u16),
+    /// The screen row (history and screen, from the oldest line) of the frame's first row.
+    pub top: u64,
+    /// Where the selection starts, as (column, screen row).
+    pub anchor: (u16, u64),
+    /// The cursor in the frame.
     pub cursor: (u16, u16),
     pub selecting: bool,
     pub query: String,
 }
 impl Copy {
-    pub fn new(frame: Frame) -> Self {
+    pub fn new(frame: Frame, top: u64) -> Self {
         Self {
             frame,
-            anchor: (0, 0),
+            top,
+            anchor: (0, top),
             cursor: (0, 0),
             selecting: false,
             query: String::new(),
         }
+    }
+    /// The cursor as (column, screen row).
+    pub fn cursor_point(&self) -> (u16, u64) {
+        (self.cursor.0, self.top + u64::from(self.cursor.1))
+    }
+    /// Starts the selection at the cursor.
+    pub fn anchor_here(&mut self) {
+        self.anchor = self.cursor_point();
+    }
+    /// Shows another part of history; the anchor stays where it was.
+    pub fn rebase(&mut self, frame: Frame, top: u64) {
+        self.frame = frame;
+        self.top = top;
     }
     pub fn contains(&self, x: u16, y: u16) -> bool {
         if !self.selecting {
             return false;
         }
         let a = (self.anchor.1, self.anchor.0);
-        let b = (self.cursor.1, self.cursor.0);
-        let p = (y, x);
+        let cursor = self.cursor_point();
+        let b = (cursor.1, cursor.0);
+        let p = (self.top + u64::from(y), x);
         p >= a.min(b) && p <= a.max(b)
     }
-    pub fn text(&self) -> String {
-        let mut output = vec![];
-        for (y, row) in self.frame.rows.iter().enumerate() {
-            let mut line = String::new();
-            let mut selected = false;
-            let mut tail = false;
-            for (x, cell) in row.iter().enumerate() {
-                if tail {
-                    tail = false;
-                    continue;
-                }
-                tail = cell.wide;
-                if self.contains(x as u16, y as u16) {
-                    line.push_str(if cell.text.is_empty() {
-                        " "
-                    } else {
-                        &cell.text
-                    });
-                    selected = true;
-                }
-            }
-            if selected {
-                output.push(line.trim_end().to_owned());
-            }
+    /// The selected text across history, read from the terminal.
+    pub fn text(&self, vt: &crate::vt::Vt) -> String {
+        if !self.selecting {
+            return String::new();
         }
-        output.join("\n")
+        vt.selection_text(self.anchor, self.cursor_point())
     }
     pub fn search(&mut self, query: &str) -> bool {
         self.query = query.into();
@@ -89,9 +88,7 @@ impl Copy {
     }
 }
 pub fn clipboard(text: &str) -> io::Result<()> {
-    let encoded = STANDARD.encode(text);
-    write!(io::stdout(), "\x1b]52;c;{encoded}\x07")?;
-    io::stdout().flush()
+    crate::clipboard::copy(text)
 }
 
 pub fn search_history(vt: &mut crate::vt::Vt, query: &str) -> Option<Copy> {
@@ -103,7 +100,7 @@ pub fn search_history(vt: &mut crate::vt::Vt, query: &str) -> Option<Copy> {
     for page in 0..=total / step {
         let offset = (original + page * step) % total.max(1);
         vt.scroll_row(offset);
-        let mut copy = Copy::new(vt.frame());
+        let mut copy = Copy::new(vt.frame(), vt.top_row());
         if copy.search(query) {
             return Some(copy);
         }
@@ -155,23 +152,23 @@ mod tests {
         let mut copy = search_history(&mut vt, "needle").unwrap();
         assert_eq!(copy.cursor, (3, 0));
         copy.selecting = true;
-        copy.anchor = (0, 0);
+        copy.anchor = (0, copy.top);
         copy.cursor = (8, 0);
-        assert!(copy.text().starts_with("界 needle"));
+        assert!(copy.text(&vt).starts_with("界 needle"));
     }
     #[test]
     fn frozen_selection_and_search() {
         let mut vt = Vt::new(20, 3);
         vt.write(b"hello\r\nworld");
-        let mut c = Copy::new(vt.frame());
+        let mut c = Copy::new(vt.frame(), vt.top_row());
         c.selecting = true;
         c.cursor = (4, 0);
-        assert_eq!(c.text(), "hello");
+        assert_eq!(c.text(&vt), "hello");
         assert!(c.search("world"));
         assert_eq!(c.cursor, (0, 1));
         let mut spaced = Vt::new(20, 3);
         spaced.write(b"a\x1b[3Cb");
-        let mut search = Copy::new(spaced.frame());
+        let mut search = Copy::new(spaced.frame(), 0);
         assert!(search.search("a   b"));
         assert!(!search.search("ab"));
         vt.write(b"changed");

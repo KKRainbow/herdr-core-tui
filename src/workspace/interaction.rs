@@ -28,6 +28,19 @@ impl Workspace {
             Event::Key(key) => self.key(key).await,
             Event::Mouse(mouse) => self.mouse(mouse).await,
             Event::Paste(text) => {
+                // Herdr's image bridge: an empty paste carries a clipboard image, and a
+                // pasted image path is a dropped file, for terminals on another machine.
+                if self.overlay.is_none() && self.image_bridge_target().is_some() {
+                    let image = if text.is_empty() {
+                        crate::clipboard::read_image()
+                    } else {
+                        crate::clipboard::dropped_image(&text)
+                    };
+                    if let Some(image) = image {
+                        self.paste_image(image).await;
+                        return Ok(false);
+                    }
+                }
                 self.paste(&text)?;
                 Ok(false)
             }
@@ -201,8 +214,57 @@ impl Workspace {
         if let Some(action) = self.keys.direct(&key) {
             return self.action(&action).await;
         }
+        if self.keys.is_image_paste(&key)
+            && self.image_bridge_target().is_some()
+            && let Some(image) = crate::clipboard::read_image()
+        {
+            self.paste_image(image).await;
+            return Ok(false);
+        }
         self.forward_key(key)?;
         Ok(false)
+    }
+
+    /// The focused terminal when it runs on another machine, whose clipboard is not this one.
+    fn image_bridge_target(&self) -> Option<String> {
+        let surface = self.active_id().and_then(|id| self.surfaces.get(&id))?;
+        surface
+            .address
+            .contains('/')
+            .then(|| surface.address.clone())
+    }
+
+    /// Puts an image file beside the terminal through core and pastes its path, as Herdr does.
+    async fn paste_image(&mut self, image: crate::clipboard::Image) {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let Some(address) = self.image_bridge_target() else {
+            return;
+        };
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let name = format!("herder-tui-image-{stamp}.{}", image.extension);
+        let put = self
+            .session
+            .client
+            .call(
+                "terminal.put",
+                json!({"terminal":address,"name":name,"data":STANDARD.encode(&image.bytes)}),
+                TIME,
+            )
+            .await;
+        let path = match put {
+            Ok(result) => result["path"].as_str().map(str::to_owned),
+            Err(error) => return self.toast(error.to_string(), true),
+        };
+        if let (Some(path), Some(surface)) =
+            (path, self.active_id().and_then(|id| self.surfaces.get(&id)))
+            && let Some(stream) = &surface.stream
+            && let Err(error) = stream.try_input(surface.vt.paste_bytes(&path))
+        {
+            self.toast(error.to_string(), true);
+        }
     }
 
     fn copy_or_terminal(&self) -> Mode {
@@ -1919,7 +1981,7 @@ impl Workspace {
         if let Some(id) = self.active_id()
             && let Some(surface) = self.surfaces.get_mut(&id)
         {
-            let mut copy = Copy::new(surface.vt.frame());
+            let mut copy = Copy::new(surface.vt.frame(), surface.vt.top_row());
             if let Some(cursor) = copy.frame.cursor {
                 copy.cursor = cursor;
             }
@@ -1997,6 +2059,15 @@ impl Workspace {
             }
             KeyCode::Left | KeyCode::Char('h') => copy.cursor.0 = copy.cursor.0.saturating_sub(1),
             KeyCode::Right | KeyCode::Char('l') => copy.cursor.0 = (copy.cursor.0 + 1).min(max_x),
+            // Past the frame's edge, history scrolls under the cursor.
+            KeyCode::Up | KeyCode::Char('k') if copy.cursor.1 == 0 => {
+                surface.vt.scroll_viewport(-1);
+                copy.rebase(surface.vt.frame(), surface.vt.top_row());
+            }
+            KeyCode::Down | KeyCode::Char('j') if copy.cursor.1 == max_y => {
+                surface.vt.scroll_viewport(1);
+                copy.rebase(surface.vt.frame(), surface.vt.top_row());
+            }
             KeyCode::Up | KeyCode::Char('k') => copy.cursor.1 = copy.cursor.1.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => copy.cursor.1 = (copy.cursor.1 + 1).min(max_y),
             KeyCode::Home | KeyCode::Char('0') => copy.cursor.0 = 0,
@@ -2027,12 +2098,12 @@ impl Workspace {
             KeyCode::Char('g') => copy.cursor = (0, 0),
             KeyCode::Char('G') => copy.cursor.1 = max_y,
             KeyCode::Char(' ') | KeyCode::Char('v') => {
-                copy.anchor = copy.cursor;
+                copy.anchor_here();
                 copy.selecting = !copy.selecting;
             }
             KeyCode::Char('y') | KeyCode::Enter => {
                 if copy.selecting {
-                    clipboard(&copy.text())?;
+                    clipboard(&copy.text(&surface.vt))?;
                     surface.copy = None;
                     self.mode = Mode::Terminal;
                     self.toast("copied to clipboard", false);
@@ -2057,7 +2128,7 @@ impl Workspace {
                     surface.vt.rows as isize
                 };
                 surface.vt.scroll_viewport(delta);
-                surface.copy = Some(Copy::new(surface.vt.frame()));
+                copy.rebase(surface.vt.frame(), surface.vt.top_row());
             }
             _ => {}
         }
@@ -2582,6 +2653,19 @@ impl Workspace {
                     self.drag = Some(Drag::Splitter(resize));
                 }
             }
+            Drag::SelectWords(pane) => {
+                if !released {
+                    self.drag = Some(Drag::SelectWords(pane));
+                } else if let Some(surface) = self.surfaces.get_mut(&pane)
+                    && let Some(copy) = surface.copy.take()
+                {
+                    let text = copy.text(&surface.vt);
+                    if !text.is_empty() && self.preferences.ui.copy_on_select {
+                        clipboard(&text)?;
+                        self.toast("copied to clipboard", false);
+                    }
+                }
+            }
             Drag::Select(pane) => {
                 let Some(content) = self.panes.iter().find(|p| p.id == pane).map(|p| p.content)
                 else {
@@ -2590,13 +2674,25 @@ impl Workspace {
                 if let Some(surface) = self.surfaces.get_mut(&pane)
                     && let Some(copy) = &mut surface.copy
                 {
+                    // Dragging past the top or bottom scrolls history, as in Herdr.
+                    let scroll = if y < content.y {
+                        -1
+                    } else if y >= content.bottom() {
+                        1
+                    } else {
+                        0
+                    };
+                    if scroll != 0 {
+                        surface.vt.scroll_viewport(scroll);
+                        copy.rebase(surface.vt.frame(), surface.vt.top_row());
+                    }
                     copy.cursor = (
                         x.clamp(content.x, content.right().saturating_sub(1)) - content.x,
                         y.clamp(content.y, content.bottom().saturating_sub(1)) - content.y,
                     );
                     if released {
-                        let text = copy.text();
-                        let moved = copy.cursor != copy.anchor;
+                        let text = copy.text(&surface.vt);
+                        let moved = copy.cursor_point() != copy.anchor;
                         surface.copy = None;
                         if moved && !text.is_empty() && self.preferences.ui.copy_on_select {
                             clipboard(&text)?;
@@ -2645,10 +2741,44 @@ impl Workspace {
         let program_mouse =
             surface.vt.mouse_tracking() && !mouse.modifiers.contains(KeyModifiers::SHIFT);
         if left_down && (!program_mouse || self.mode == Mode::Copy) {
-            let mut copy = Copy::new(surface.vt.frame());
-            copy.anchor = (mouse.column, mouse.row);
-            copy.cursor = copy.anchor;
+            let now = Instant::now();
+            let count = match &self.last_click {
+                Some(click) if click.repeats(&id, mouse.column, mouse.row, now) => {
+                    click.count % 3 + 1
+                }
+                _ => 1,
+            };
+            self.last_click = Some(super::Click {
+                at: now,
+                pane: id.clone(),
+                col: mouse.column,
+                row: mouse.row,
+                count,
+            });
+            let mut copy = Copy::new(surface.vt.frame(), surface.vt.top_row());
+            copy.cursor = (mouse.column, mouse.row);
+            copy.anchor_here();
             copy.selecting = true;
+            if count > 1 {
+                let row = copy.top + u64::from(mouse.row);
+                let last = surface.vt.cols.saturating_sub(1);
+                let line = surface.vt.selection_text((0, row), (last, row));
+                let bounds = if count == 2 {
+                    crate::word::word_bounds_at_column(&line, mouse.column)
+                } else {
+                    Some((0, last))
+                };
+                match bounds {
+                    Some((start, end)) => {
+                        copy.anchor = (start, row);
+                        copy.cursor = (end, mouse.row);
+                    }
+                    None => copy.selecting = false,
+                }
+                surface.copy = Some(copy);
+                self.drag = Some(Drag::SelectWords(id));
+                return Ok(());
+            }
             surface.copy = Some(copy);
             self.drag = Some(Drag::Select(id));
             return Ok(());

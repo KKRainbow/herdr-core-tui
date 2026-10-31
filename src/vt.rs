@@ -419,6 +419,43 @@ impl Vt {
     }
     /// Plain text of history and screen, soft wraps joined, as Herdr hands to `$EDITOR`.
     pub fn text(&self) -> String {
+        self.format(std::ptr::null())
+    }
+    /// The first visible row's position in history and screen rows (Ghostty's screen coordinates).
+    pub fn top_row(&self) -> u64 {
+        self.scroll_position().0
+    }
+    /// Plain text between two inclusive `(column, screen row)` points in either order,
+    /// as Herdr's `format_selection` reads a selection across history.
+    pub fn selection_text(&self, start: (u16, u64), end: (u16, u64)) -> String {
+        let grid = |(x, row): (u16, u64)| unsafe {
+            let mut point = GhosttyPoint {
+                tag: GHOSTTY_POINT_TAG_SCREEN,
+                ..Default::default()
+            };
+            point.value.coordinate = GhosttyPointCoordinate {
+                x,
+                y: u32::try_from(row).unwrap_or(u32::MAX),
+            };
+            let mut reference = GhosttyGridRef {
+                size: std::mem::size_of::<GhosttyGridRef>(),
+                ..Default::default()
+            };
+            (ghostty_terminal_grid_ref(self.term, point, &mut reference) == GHOSTTY_SUCCESS)
+                .then_some(reference)
+        };
+        let (Some(start), Some(end)) = (grid(start), grid(end)) else {
+            return String::new();
+        };
+        let selection = GhosttySelection {
+            size: std::mem::size_of::<GhosttySelection>(),
+            start,
+            end,
+            rectangle: false,
+        };
+        self.format(&selection)
+    }
+    fn format(&self, selection: *const GhosttySelection) -> String {
         unsafe {
             let mut formatter: GhosttyFormatter = std::ptr::null_mut();
             let options = GhosttyFormatterTerminalOptions {
@@ -434,7 +471,7 @@ impl Vt {
                     },
                     ..Default::default()
                 },
-                selection: std::ptr::null(),
+                selection,
             };
             if ghostty_formatter_terminal_new(std::ptr::null(), &mut formatter, self.term, options)
                 != GHOSTTY_SUCCESS
@@ -995,5 +1032,23 @@ mod tests {
         );
         vt.write(b"\x1b[?1049h");
         assert!(!vt.clear());
+    }
+
+    #[test]
+    fn selections_span_history_pages() {
+        let mut vt = Vt::new(20, 3);
+        for i in 0..12 {
+            vt.write(format!("line{i:02}\r\n").as_bytes());
+        }
+        let top = vt.top_row();
+        assert!(top >= 9, "{top}");
+        // From the second line of history to the third row on screen, across pages.
+        let text = vt.selection_text((0, 1), (5, top + 2));
+        assert!(
+            text.starts_with("line01\n") && text.ends_with("line11"),
+            "{text}"
+        );
+        // Reversed points select the same range.
+        assert_eq!(vt.selection_text((5, top + 2), (0, 1)), text);
     }
 }

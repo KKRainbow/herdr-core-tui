@@ -246,6 +246,8 @@ pub struct Keymap {
     commands: Vec<(Binding, Option<String>)>,
     ranges: Vec<(String, Range)>,
     navigation: Vec<(String, Combo)>,
+    /// Herdr's `remote_image_paste`: pastes a local clipboard image into a remote terminal.
+    image_paste: Option<Combo>,
 }
 
 impl Default for Keymap {
@@ -320,6 +322,9 @@ impl Keymap {
             ranges,
             navigation,
             commands: vec![],
+            image_paste: parse(&value("remote_image_paste", "ctrl+v"))
+                .filter(|b| !b.prefix)
+                .map(|b| b.combo),
         };
         for (key, description) in commands {
             let binding = parse(key).filter(|b| {
@@ -382,6 +387,9 @@ impl Keymap {
             .iter()
             .find(|(_, range)| range.prefix == prefix && range.modifiers == combo.modifiers)
             .map(|(action, _)| format!("{action}:{c}"))
+    }
+    pub fn is_image_paste(&self, key: &KeyEvent) -> bool {
+        self.image_paste == Some(combo(key))
     }
     /// The `navigate_*` action a key runs inside workspace navigation.
     pub fn navigation(&self, key: &KeyEvent) -> Option<&str> {

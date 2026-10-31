@@ -50,6 +50,22 @@ struct Surface {
     wanted: (u16, u16),
     error: Option<String>,
 }
+struct Click {
+    at: Instant,
+    pane: String,
+    col: u16,
+    row: u16,
+    count: u8,
+}
+impl Click {
+    /// Herdr's double-click window: the same pane within 350 ms and one cell.
+    fn repeats(&self, pane: &str, col: u16, row: u16, at: Instant) -> bool {
+        self.pane == pane
+            && at.duration_since(self.at) <= Duration::from_millis(350)
+            && self.row.abs_diff(row) <= 1
+            && self.col.abs_diff(col) <= 1
+    }
+}
 struct ResizeDrag {
     splitter: layout::Splitter,
     origin: u16,
@@ -64,6 +80,8 @@ enum Drag {
     Sidebar,
     Section,
     Select(String),
+    /// A double- or triple-click selection: the word or line stays as chosen until release.
+    SelectWords(String),
     /// A press on a space or tab: a click on release, or a reorder once it moves.
     Press {
         target: Pressed,
@@ -103,6 +121,8 @@ pub struct Workspace {
     /// Scrollback text waiting to open in `$EDITOR` once the loop can hand over the host.
     pending_editor: Option<String>,
     notifications: notifications::Notifications,
+    /// The last selection press, for Herdr's double-click and a triple-click.
+    last_click: Option<Click>,
     /// The outer terminal title last written, from Herdr's `ui.window_title`.
     window_title: Option<String>,
     drag: Option<Drag>,
@@ -883,6 +903,7 @@ pub async fn run(
         notification_target: None,
         pending_editor: None,
         notifications: Default::default(),
+        last_click: None,
         window_title: None,
         drag: None,
         session,

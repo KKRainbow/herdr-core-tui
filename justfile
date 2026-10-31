@@ -28,6 +28,7 @@ integration: build
     python3 tests/ui_options.py
     python3 tests/notifications.py
     python3 tests/mobile.py
+    python3 tests/selection.py
 
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored

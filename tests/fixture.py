@@ -4,6 +4,8 @@ class Core:
  def __init__(self,name,environment=None):
   self.temporary=tempfile.TemporaryDirectory(prefix="tui-"+name+"-");self.root=pathlib.Path(self.temporary.name)
   self.env=dict(os.environ,HERDER_TUI_DISABLE_SOUND="1",HC_SESSION=name,XDG_RUNTIME_DIR=str(self.root/"run"),XDG_STATE_HOME=str(self.root/"state"),XDG_CONFIG_HOME=str(self.root/"config"),HERDR_APP_HOME=str(self.root/"app"),TERM="xterm-256color")
+  # Never reach the person's desktop clipboard or notifications; tests opt in.
+  for name in ("WAYLAND_DISPLAY","DISPLAY"):self.env.pop(name,None)
   self.env.update(environment or {})
   pathlib.Path(self.env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
   self.proxy=subprocess.Popen(["hc","connect"],env=self.env,cwd=self.root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)

@@ -82,6 +82,8 @@ pub struct Ui {
     /// `{terminal_title}`. Empty leaves the title alone.
     pub window_title: String,
     pub toast: Toast,
+    /// At or below this many columns, Herdr's mobile layout. Default 64.
+    pub mobile_width_threshold: u16,
 }
 /// Herdr's `[ui.toast]`: where agent notifications go, after an optional delay.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -136,6 +138,7 @@ impl Default for Ui {
             tab_bar_position: "top".into(),
             window_title: "{hostname}: {workspace}".into(),
             toast: Toast::default(),
+            mobile_width_threshold: 64,
         }
     }
 }

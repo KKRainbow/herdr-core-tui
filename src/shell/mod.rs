@@ -2,6 +2,7 @@
 //! and fed by `herdr-client-lib` documents and core terminal facts.
 pub mod chrome;
 pub mod keys;
+pub mod mobile;
 pub mod overlays;
 pub mod palette;
 pub mod panes;
@@ -73,6 +74,10 @@ pub struct Hits {
     pub agent_scrollbar: Rect,
     pub workspace_scroll_metrics: Option<ScrollMetrics>,
     pub agent_scroll_metrics: Option<ScrollMetrics>,
+    pub mobile_switch: Rect,
+    pub mobile_close: Rect,
+    pub mobile_targets: Vec<(Rect, mobile::MobileTarget)>,
+    pub mobile_max_scroll: usize,
 }
 
 pub const SIDEBAR_MIN_WIDTH: u16 = 18;
@@ -81,6 +86,8 @@ pub const SIDEBAR_COLLAPSED_WIDTH: u16 = 4;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Layout {
+    /// Herdr's mobile header; empty on wide terminals.
+    pub mobile_header: Rect,
     pub sidebar: Rect,
     pub tab_bar: Rect,
     pub pane_surface: Rect,
@@ -105,6 +112,8 @@ pub struct Shape {
     pub min_width: u16,
     pub max_width: u16,
     pub tab_bar: TabBar,
+    /// Herdr's `mobile_width_threshold`: at or below this width, the mobile layout.
+    pub mobile_width_threshold: u16,
 }
 
 impl Default for Shape {
@@ -116,12 +125,22 @@ impl Default for Shape {
             min_width: SIDEBAR_MIN_WIDTH,
             max_width: SIDEBAR_MAX_WIDTH,
             tab_bar: TabBar::Top,
+            mobile_width_threshold: 64,
         }
     }
 }
 
 /// Herdr's desktop layout: sidebar on the left, the tab row above (or below) the panes.
 pub fn layout(cols: u16, rows: u16, shape: Shape) -> Layout {
+    if cols <= shape.mobile_width_threshold {
+        let header_height = rows.min(2);
+        return Layout {
+            mobile_header: Rect::new(0, 0, cols, header_height),
+            sidebar: Rect::default(),
+            tab_bar: Rect::default(),
+            pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
+        };
+    }
     let sidebar_width = if shape.collapsed {
         if shape.hidden_when_collapsed {
             0
@@ -142,6 +161,7 @@ pub fn layout(cols: u16, rows: u16, shape: Shape) -> Layout {
         (0, tab_height)
     };
     Layout {
+        mobile_header: Rect::default(),
         sidebar: Rect::new(0, 0, sidebar_width, rows),
         tab_bar: Rect::new(sidebar_width, tab_y, main_width, tab_height),
         pane_surface: Rect::new(sidebar_width, panes_y, main_width, panes_height),
@@ -204,5 +224,9 @@ mod tests {
             ..shape
         };
         assert_eq!(layout(100, 20, narrow).sidebar.width, 12);
+        let phone = layout(50, 24, shape);
+        assert_eq!(phone.mobile_header, Rect::new(0, 0, 50, 2));
+        assert_eq!(phone.pane_surface, Rect::new(0, 2, 50, 22));
+        assert!(phone.sidebar.is_empty() && phone.tab_bar.is_empty());
     }
 }

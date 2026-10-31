@@ -68,6 +68,9 @@ Add custom command keys as Herdr's `[[keys.command]]` tables, each with `key`, `
 `shell` runs in the background with `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, `HERDR_ACTIVE_PANE_CWD`, and `HC_SESSION`; `pane` and `popup` open a zoomed pane.
 Clear pane drops this viewer's history and the rows above the cursor line; the program and other viewers keep theirs.
 
+At or below `[ui] mobile_width_threshold` columns (64 by default), Herdr's mobile layout replaces the sidebar and tab row with a two-row header.
+Tap `switch` or press prefix+w for a full-screen list of machines, agents, spaces, tabs, and the menu.
+
 Click spaces, tabs, and agents to navigate.
 Drag spaces and tabs to reorder them; a main checkout moves with its linked worktrees.
 Click `new` for a workspace, `menu` for keybinds, reload, and detach, and `+` for a tab.

@@ -358,6 +358,7 @@ impl Workspace {
                 min_width: ui.sidebar_min_width,
                 max_width: ui.sidebar_max_width,
                 tab_bar,
+                mobile_width_threshold: ui.mobile_width_threshold,
             },
         );
         let body = self.layout.pane_surface;

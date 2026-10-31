@@ -1075,6 +1075,84 @@ impl Workspace {
         }
     }
 
+    // ---- mobile (Herdr `src/client/shell/mobile.rs`) --------------------------
+
+    pub(super) fn mobile_switcher_open(&self) -> bool {
+        !self.layout.mobile_header.is_empty()
+            && self.mode == Mode::Navigate
+            && self.overlay.is_none()
+    }
+
+    /// The switch button opens the switcher; inside it, rows open their targets.
+    /// Returns None when the event is not the switcher's, else whether to quit.
+    async fn mobile_mouse(&mut self, mouse: MouseEvent) -> Result<Option<bool>> {
+        let point = (mouse.column, mouse.row);
+        let left = mouse.kind == MouseEventKind::Down(MouseButton::Left);
+        if self.mode != Mode::Navigate {
+            if matches!(self.mode, Mode::Terminal | Mode::Resize)
+                && left
+                && contains(self.hits.mobile_switch, point.0, point.1)
+            {
+                self.chrome.mobile_scroll = 0;
+                self.mode = Mode::Navigate;
+                self.chrome.selected_workspace_id = self.snapshot.focused_workspace_id.clone();
+                return Ok(Some(false));
+            }
+            return Ok(None);
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.chrome.mobile_scroll = self.chrome.mobile_scroll.saturating_sub(2);
+                return Ok(Some(false));
+            }
+            MouseEventKind::ScrollDown => {
+                self.chrome.mobile_scroll =
+                    (self.chrome.mobile_scroll + 2).min(self.hits.mobile_max_scroll);
+                return Ok(Some(false));
+            }
+            _ if !left => return Ok(Some(false)),
+            _ => {}
+        }
+        let close = |this: &mut Self| {
+            this.mode = this.copy_or_terminal();
+            this.chrome.selected_workspace_id = None;
+        };
+        if contains(self.hits.mobile_close, point.0, point.1) {
+            close(self);
+            return Ok(Some(false));
+        }
+        let target = self
+            .hits
+            .mobile_targets
+            .iter()
+            .find(|(rect, _)| contains(*rect, point.0, point.1))
+            .map(|(_, target)| target.clone());
+        let Some(target) = target else {
+            return Ok(Some(false));
+        };
+        close(self);
+        use shell::mobile::MobileTarget as T;
+        match target {
+            T::Machine(machine) => {
+                self.run("machine", json!({"machine":machine})).await;
+            }
+            T::NewWorkspace => {
+                self.action("new_workspace").await?;
+            }
+            T::Workspace(id) | T::Tab(id) => self.focus_container(&id),
+            T::Agent(address) => self.focus_agent(&address),
+            T::NewTab => {
+                self.action("new_tab").await?;
+            }
+            T::Menu(index) => {
+                if let Some((_, action)) = global_menu_items().get(index).copied() {
+                    return self.menu_action(action, None).await.map(Some);
+                }
+            }
+        }
+        Ok(Some(false))
+    }
+
     // ---- custom commands (Herdr `src/app/custom_commands.rs`) --------------
 
     /// What a custom command learns about the viewer, under Herdr's variable names.
@@ -1992,6 +2070,11 @@ impl Workspace {
         let (x, y) = (mouse.column, mouse.row);
         if self.overlay.is_some() {
             return self.overlay_mouse(mouse).await;
+        }
+        if !self.layout.mobile_header.is_empty()
+            && let Some(quit) = self.mobile_mouse(mouse).await?
+        {
+            return Ok(quit);
         }
         if let Some(drag) = self.drag.take() {
             return self.continue_drag(drag, mouse).await;

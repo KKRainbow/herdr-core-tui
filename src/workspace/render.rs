@@ -202,7 +202,15 @@ impl Workspace {
             );
         }
         let layout = self.layout;
-        if self.sidebar_collapsed {
+        if !layout.mobile_header.is_empty() {
+            shell::mobile::render_mobile_header(
+                frame.buffer_mut(),
+                layout.mobile_header,
+                &self.snapshot,
+                &self.config,
+                &mut self.hits,
+            );
+        } else if self.sidebar_collapsed {
             chrome::render_collapsed_sidebar(
                 frame.buffer_mut(),
                 layout.sidebar,
@@ -245,6 +253,23 @@ impl Workspace {
                 let (_, offset) = search.query.viewport(bar.width.saturating_sub(8));
                 cursor = Some((bar.x + 8 + offset, bar.y));
             }
+        }
+        if self.mobile_switcher_open() {
+            let area = frame.area();
+            shell::mobile::render_mobile_switcher(
+                frame.buffer_mut(),
+                area,
+                &self.snapshot,
+                shell::mobile::Machines {
+                    names: &self.machines,
+                    current: &self.machine,
+                },
+                &self.config,
+                self.chrome.selected_workspace_id.as_deref(),
+                &mut self.chrome.mobile_scroll,
+                &mut self.hits,
+            );
+            cursor = None;
         }
         self.overlay_render = OverlayRender::default();
         if let Some(overlay) = &self.overlay {

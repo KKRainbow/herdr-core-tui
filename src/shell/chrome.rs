@@ -26,6 +26,8 @@ const MIN_TAB_STRIP_WIDTH: u16 =
 /// Scroll and selection state the chrome reads and adjusts while drawing.
 #[derive(Default)]
 pub struct ChromeState {
+    /// Rows scrolled in Herdr's mobile switcher.
+    pub mobile_scroll: usize,
     pub workspace_scroll: usize,
     pub agent_scroll: usize,
     pub tab_scroll: usize,
@@ -88,7 +90,14 @@ pub fn put_right_text(buffer: &mut Buffer, area: Rect, y: u16, text: &str, style
     );
 }
 
-fn put_segment(buffer: &mut Buffer, x: u16, y: u16, right: u16, text: &str, style: Style) -> u16 {
+pub fn put_segment(
+    buffer: &mut Buffer,
+    x: u16,
+    y: u16,
+    right: u16,
+    text: &str,
+    style: Style,
+) -> u16 {
     let width = display_width(text).min(right.saturating_sub(x));
     put_text(buffer, x, y, width, text, style);
     x.saturating_add(width)

@@ -127,7 +127,12 @@ try:
     drag([(30, 1), (31, 1), (60, 1)])
     until(lambda: tab_ids()[focused] == tabs[::-1])
 
+    # At Herdr's mobile threshold (64 columns) the header replaces the sidebar.
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 60, 0, 0))
+    os.kill(process.pid, signal.SIGWINCH)
+    output = read_for(.5)
+    assert b"switch" in output and b"menu" not in output, output[-2000:]
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 70, 0, 0))
     os.kill(process.pid, signal.SIGWINCH)
     output = read_for(.5)
     assert b"new" in output and b"menu" in output, output[-2000:]

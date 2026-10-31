@@ -33,10 +33,9 @@ integration: build
 workflows-integration:
     cargo test workspace_and_worktree_workflows -- --ignored
 
-app-integration: build
-    python3 tests/app_terminal.py
-    python3 tests/workspace_app.py
-    python3 tests/agents_app.py
+# Pass display=/run/user/$UID/wayland-1 to draw on an existing compositor instead of Weston.
+app-integration display="": build
+    python3 scripts/app_integration.py {{ if display != "" { "--display " + quote(display) } else { "" } }}
 
 package output:
     python3 scripts/package.py {{quote(output)}}

@@ -64,12 +64,27 @@ Side-by-side captures compared the sidebar, agents panel, tab bar, pane borders,
 | Rust 1.89.0 | All targets checked |
 | Performance profile | Idle and hidden output: no CPU or renders at 1 and 15 panes; visible output 13.4% and 14.6% CPU, about 1 MiB more memory than before |
 
+## Herdr parity work
+
+Rechecked on Linux on 2026-10-30 with hc 0.1.14 and unchanged installed herdr-app 0.1.10.
+
+| Check | Result |
+|---|---|
+| Formatting, Clippy, fast behavior tests | Passed: fifty-nine tests |
+| `just cross-check` | Clippy passed for `x86_64-pc-windows-gnu` and `aarch64-apple-darwin` from Linux |
+| `just integration` | Passed, including startup, keys, settings, Herdr config, UI options, notifications, mobile, selection, attention, and worktree removal |
+| `cli`, `discovery`, `chrome`, `compatibility`, `geometry`, `resize`, `remote` | Passed |
+| `just app-integration display=…` | Passed: `app_terminal.py`, `workspace_app.py`, `agents_app.py` on the desktop's Wayland socket with scratch app and core state |
+
+No headless compositor was installed; the app checks drew on the person's Hyprland session with their consent.
+Windows and macOS were compile-checked only; their runtime behavior is unvalidated.
+Windows checks use the MinGW target because Zig cannot supply MSVC's C library on Linux.
+
 ## Limits
 
-The local control endpoint uses Unix sockets; Windows requires a native transport.
-Native macOS behavior is unvalidated.
-Clipboard writes depend on host OSC 52 support.
+The local control endpoint uses Unix sockets, and named pipes for the current user on Windows.
+Native macOS and Windows behavior is unvalidated.
+Clipboard writes use native helpers when present, else host OSC 52 support.
 Kitty graphics use clipped half-block cells; virtual placements and pixel-perfect rendering are unsupported.
-Selection is limited to one retained viewport page at a time.
 Completed terminals use core's retained text when no live stream is available.
 Host restoration is guaranteed for handled exits and panics, not SIGKILL or a host terminal crash.

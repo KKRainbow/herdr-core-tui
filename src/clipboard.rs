@@ -2,23 +2,30 @@
 //! Adapted from Herdr `src/platform/linux/clipboard.rs`, `src/platform/linux.rs`,
 //! `src/selection.rs`, and `src/client/clipboard_images.rs` at
 //! ee5bfb5041bb3e4a49d591c72308aae3c81ecdde.
-use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::process::CommandExt;
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use {
+    std::io::Read,
+    std::os::fd::{AsRawFd, RawFd},
+    std::os::unix::process::CommandExt,
+    std::process::{Child, Stdio},
+};
 
 // Allow slow desktop startup, but never let a clipboard operation wedge the client.
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// Core's `terminal.put` limit.
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
+#[cfg(unix)]
 struct Helper {
     child: Child,
     completed: bool,
 }
 
+#[cfg(unix)]
 impl Drop for Helper {
     fn drop(&mut self) {
         if !self.completed {
@@ -32,6 +39,7 @@ impl Drop for Helper {
     }
 }
 
+#[cfg(unix)]
 fn nonblocking(fd: RawFd) -> io::Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
@@ -40,6 +48,7 @@ fn nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn run(
     mut command: Command,
     input: Option<&[u8]>,
@@ -140,6 +149,58 @@ fn run(
     }
 }
 
+/// Windows helpers: a reader thread and a deadline; no process groups to reap.
+#[cfg(windows)]
+fn run(
+    mut command: Command,
+    input: Option<&[u8]>,
+    max_bytes: usize,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    if let (Some(mut pipe), Some(input)) = (child.stdin.take(), input) {
+        pipe.write_all(input)?;
+    }
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = (&mut stdout)
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes);
+        read.map(|_| bytes)
+    });
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let bytes = reader
+                .join()
+                .map_err(|_| io::Error::other("reader failed"))??;
+            if !status.success() {
+                return Err(io::Error::other("clipboard helper failed"));
+            }
+            if bytes.len() > max_bytes {
+                return Err(io::ErrorKind::FileTooLarge.into());
+            }
+            return Ok(bytes);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Herdr's writers: `wl-copy` on Wayland, `xclip` or `xsel` on X11, `pbcopy` on macOS.
 fn write_commands() -> Vec<(&'static str, &'static [&'static str])> {
     let mut commands: Vec<(&'static str, &'static [&'static str])> = Vec::new();
@@ -206,7 +267,26 @@ fn matches_signature(extension: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// The Windows clipboard's image through PowerShell, as Herdr reads it under WSL.
+#[cfg(windows)]
+pub fn read_image() -> Option<Image> {
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-STA",
+        "-Command",
+        "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image=[System.Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; $stream=[System.IO.MemoryStream]::new(); try { $image.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::OpenStandardOutput().Write($stream.GetBuffer(), 0, [int]$stream.Length) } finally { $stream.Dispose(); $image.Dispose() }",
+    ]);
+    let bytes = run(command, None, MAX_IMAGE_BYTES, Instant::now() + TIMEOUT).ok()?;
+    matches_signature("png", &bytes).then_some(Image {
+        bytes,
+        extension: "png",
+    })
+}
+
 /// The clipboard's image, tried in Herdr's order of types and tools.
+#[cfg(not(windows))]
 pub fn read_image() -> Option<Image> {
     let deadline = Instant::now() + TIMEOUT;
     for (mime, extension) in [

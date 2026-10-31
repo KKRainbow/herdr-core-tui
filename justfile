@@ -79,3 +79,7 @@ compatibility-integration: release
 
 package-check:
     python3 scripts/check-package.py
+
+cross-check:
+    cargo clippy --target x86_64-pc-windows-gnu --all-targets --locked -- -D warnings
+    cargo clippy --target aarch64-apple-darwin --all-targets --locked -- -D warnings

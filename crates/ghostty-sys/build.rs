@@ -13,6 +13,7 @@ fn zig_target(target: &str) -> &'static str {
         "aarch64-apple-darwin" => "aarch64-macos",
         "x86_64-pc-windows-msvc" => "x86_64-windows-msvc",
         "aarch64-pc-windows-msvc" => "aarch64-windows-msvc",
+        "x86_64-pc-windows-gnu" => "x86_64-windows-gnu",
         other => panic!("ghostty-sys: no Zig target for {other}"),
     }
 }
@@ -59,6 +60,13 @@ fn main() {
             lib.join("ghostty-vt.lib"),
         )
         .unwrap();
+    } else if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Zig names the MinGW archive as it does the MSVC one.
+        std::fs::copy(
+            out.join("zig-out/lib/ghostty-vt-static.lib"),
+            lib.join("libghostty-vt.a"),
+        )
+        .unwrap();
     } else {
         std::fs::copy(
             out.join("zig-out/lib/libghostty-vt.a"),
@@ -82,7 +90,24 @@ fn main() {
     let mut builder = bindgen::Builder::default()
         .header(include.join("ghostty/vt.h").to_string_lossy())
         .clang_arg(format!("-I{}", include.display()));
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    let target = std::env::var("TARGET").unwrap();
+    let host = std::env::var("HOST").unwrap();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target != host && !host.contains("apple") && target_os != "linux" {
+        // Cross builds parse the target's C library, which Zig ships (as the Zig
+        // build above uses), never the host's.
+        let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+        let (triple, libc) = if target_os == "windows" {
+            (format!("{arch}-pc-windows-gnu"), "any-windows-any")
+        } else {
+            (target.clone(), "any-darwin-any")
+        };
+        builder = builder
+            .clang_arg(format!("--target={triple}"))
+            .clang_arg("-nostdinc")
+            .clang_arg(format!("-isystem{zig_lib}/include"))
+            .clang_arg(format!("-isystem{zig_lib}/libc/include/{libc}"));
+    } else if target_os == "macos" {
         // Apple's libclang has its builtin headers but needs the SDK for the C
         // library (Zig's builtin headers clash with it there).
         if let Ok(sdk) = Command::new("xcrun").args(["--show-sdk-path"]).output() {

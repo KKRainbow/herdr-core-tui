@@ -111,6 +111,9 @@ These Herdr `[ui]` options apply with Herdr's defaults: `sidebar_min_width`, `si
 `[terminal] default_shell` sets the program new panes run; empty uses core's shell.
 Set `[ui.sound] enabled = false` to silence agents, or give `path`, `done_path`, and `request_path` mp3 files to replace Herdr's sounds.
 An agent asking a question always sounds; a finished agent sounds unless you are watching its pane.
+Set `[ui.toast] delivery` to `herdr` for a card inside the TUI, `terminal` for an OSC 9 or OSC 99 notification, or `system` for `notify-send` or `osascript`; `off` is the default.
+`delay_seconds` waits before delivering and drops a finish you saw or a request already answered; `[ui.toast.herdr] position` places the card.
+prefix+o opens the card's agent.
 Sounds play through `paplay`, `pw-play`, `ffplay`, `mpg123`, or `mpv` on Linux and `afplay` on macOS.
 Set `HERDER_TUI_DISABLE_SOUND` to silence them for a session.
 Omitted settings use Herdr's defaults.

@@ -81,6 +81,38 @@ pub struct Ui {
     /// Outer terminal title; tokens `{hostname}`, `{workspace}`, `{tab}`, `{pane}`,
     /// `{terminal_title}`. Empty leaves the title alone.
     pub window_title: String,
+    pub toast: Toast,
+}
+/// Herdr's `[ui.toast]`: where agent notifications go, after an optional delay.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Toast {
+    /// `off`, `herdr` (a card inside the TUI), `terminal`, or `system`.
+    pub delivery: String,
+    pub delay_seconds: u64,
+    pub herdr: HerdrToast,
+}
+impl Default for Toast {
+    fn default() -> Self {
+        Self {
+            delivery: "off".into(),
+            delay_seconds: 0,
+            herdr: HerdrToast::default(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct HerdrToast {
+    /// `top-left`, `top-right`, `bottom-left`, or `bottom-right`.
+    pub position: String,
+}
+impl Default for HerdrToast {
+    fn default() -> Self {
+        Self {
+            position: "bottom-right".into(),
+        }
+    }
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -103,6 +135,7 @@ impl Default for Ui {
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: "top".into(),
             window_title: "{hostname}: {workspace}".into(),
+            toast: Toast::default(),
         }
     }
 }

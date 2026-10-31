@@ -1,5 +1,6 @@
 mod git;
 mod interaction;
+mod notifications;
 mod render;
 use crate::{
     Host, Result, actions,
@@ -32,7 +33,7 @@ use herdr_client_lib::{
 use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::{self, stdout},
     time::{Duration, Instant},
 };
@@ -101,6 +102,7 @@ pub struct Workspace {
     notification_target: Option<String>,
     /// Scrollback text waiting to open in `$EDITOR` once the loop can hand over the host.
     pending_editor: Option<String>,
+    notifications: notifications::Notifications,
     /// The outer terminal title last written, from Herdr's `ui.window_title`.
     window_title: Option<String>,
     drag: Option<Drag>,
@@ -214,7 +216,7 @@ impl Workspace {
             .filter_map(|(machine, slot)| Some(model::places(slot.document.as_ref()?, machine)))
             .flat_map(|places| places.into_keys())
             .collect();
-        let mut sounds = BTreeSet::new();
+        let mut alerts = Vec::new();
         let mut looked_at = Vec::new();
         for (identity, record) in &self.session.terminals {
             let word = record.word().map(str::to_owned);
@@ -236,8 +238,7 @@ impl Workspace {
             if self.listed_once
                 && let Some(alert) = alert
             {
-                sounds.insert(crate::sound::for_alert(alert));
-                self.notification_target = Some(record.address.clone());
+                alerts.push((identity.clone(), record.address.clone(), alert));
             }
             self.attention.set_word(identity, word, app, looking);
             if looking {
@@ -256,10 +257,9 @@ impl Workspace {
         let terminals = &self.session.terminals;
         self.attention
             .retain(|id| terminals.contains_key(id) || !loaded.contains(&id.core));
-        if self.preferences.sound.enabled {
-            for sound in sounds {
-                crate::sound::play(sound, self.preferences.sound.path(sound));
-            }
+        let now = Instant::now();
+        for (identity, address, alert) in alerts {
+            self.notify(identity, &address, alert, now);
         }
         if let Some(doc) = self.document() {
             let view = self.view_mut();
@@ -881,6 +881,7 @@ pub async fn run(
         listed_once: false,
         notification_target: None,
         pending_editor: None,
+        notifications: Default::default(),
         window_title: None,
         drag: None,
         session,
@@ -949,6 +950,8 @@ pub async fn run(
     let mut connected = true;
     let mut retry = tokio::time::interval(Duration::from_secs(2));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut notify = tokio::time::interval(Duration::from_millis(100));
+    notify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         if connected {
             app.refresh_snapshot();
@@ -973,6 +976,7 @@ pub async fn run(
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
             Update(std::result::Result<Notification, Error>),
             Retry,
+            Notify,
             Paint,
             Control(crate::control::Request),
             Git(git::Update),
@@ -985,6 +989,7 @@ pub async fn run(
         update=app.git_poller.next(),if connected=>Next::Git(update),
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
+        _=notify.tick(),if app.notifications.active()=>Next::Notify,
         _=redraw.tick(),if dirty=>Next::Paint,
         };
         match next {
@@ -1118,6 +1123,7 @@ pub async fn run(
                 }
                 dirty = true;
             }
+            Next::Notify => dirty |= app.tick_notifications(Instant::now()),
             Next::Retry => {
                 if app
                     .toast

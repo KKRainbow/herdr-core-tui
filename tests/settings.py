@@ -67,7 +67,7 @@ try:
         read_for()
     assert saved()["ui"]["sound"]["enabled"] is False, saved()
     # Back to themes: the third entry applies and closes settings.
-    os.write(master, b"\t\x1b[B\x1b[B\x1b[B\r")
+    os.write(master, b"\t\t\x1b[B\x1b[B\x1b[B\r")
     end = time.monotonic() + 5
     while saved().get("theme", {}).get("name") != "tokyo-night" and time.monotonic() < end:
         read_for()

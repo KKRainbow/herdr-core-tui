@@ -11,6 +11,27 @@ pub fn upsert_section_bool(content: &str, section: &str, key: &str, value: bool)
     upsert_section_raw(content, section, key, &value.to_string())
 }
 
+pub fn remove_section_key(content: &str, section: &str, key: &str) -> String {
+    let header = format!("[{section}]");
+    let mut result = Vec::new();
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == header;
+            result.push(line.to_string());
+            continue;
+        }
+        if in_section
+            && (trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}=")))
+        {
+            continue;
+        }
+        result.push(line.to_string());
+    }
+    result.join("\n") + "\n"
+}
+
 fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> String {
     let header = format!("[{section}]");
     let assignment = format!("{key} = {value}");
@@ -69,6 +90,7 @@ pub enum Edit<'a> {
     Theme(&'a str),
     StatusIndicators(&'a str),
     Sound(bool),
+    ToastDelivery(&'a str),
 }
 
 impl Edit<'_> {
@@ -83,6 +105,15 @@ impl Edit<'_> {
                 upsert_section_value(content, "ui", "status_indicators", &format!("\"{style}\""))
             }
             Self::Sound(enabled) => upsert_section_bool(content, "ui.sound", "enabled", enabled),
+            Self::ToastDelivery(delivery) => {
+                let content = upsert_section_value(
+                    content,
+                    "ui.toast",
+                    "delivery",
+                    &format!("\"{delivery}\""),
+                );
+                remove_section_key(&content, "ui.toast", "enabled")
+            }
         }
     }
 }
@@ -120,6 +151,16 @@ mod tests {
         let updated = upsert_section_bool("", "ui.toast", "enabled", true);
         assert!(updated.contains("[ui.toast]"));
         assert!(updated.contains("enabled = true"));
+    }
+
+    #[test]
+    fn remove_section_key_removes_matching_key_from_section() {
+        let content =
+            "[ui.toast]\nenabled = true\ndelivery = \"herdr\"\n[ui.sound]\nenabled = true\n";
+        let updated = remove_section_key(content, "ui.toast", "enabled");
+        assert!(!updated.contains("[ui.toast]\nenabled = true"));
+        assert!(updated.contains("delivery = \"herdr\""));
+        assert!(updated.contains("[ui.sound]\nenabled = true"));
     }
 
     #[test]

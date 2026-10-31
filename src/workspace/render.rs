@@ -281,6 +281,7 @@ impl Workspace {
             self.overlay_render = rendered.unwrap_or_default();
             cursor = self.overlay_render.cursor.map(|p| (p.x, p.y)).or(cursor);
         }
+        self.render_notification(frame.buffer_mut(), layout.pane_surface);
         if let Some(toast) = &self.toast {
             overlays::render_toast(
                 frame.buffer_mut(),

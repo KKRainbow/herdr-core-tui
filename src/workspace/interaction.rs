@@ -223,11 +223,7 @@ impl Workspace {
         match action {
             "help" => self.overlay = Some(Overlay::Help(Help::default())),
             "settings" => self.open_settings(),
-            "open_notification_target" => {
-                if let Some(address) = self.notification_target.clone() {
-                    self.focus_agent(&address);
-                }
-            }
+            "open_notification_target" => self.open_notification(),
             "edit_scrollback" => {
                 if let Some(surface) = self.active_id().and_then(|id| self.surfaces.get(&id)) {
                     self.pending_editor = Some(surface.vt.text());
@@ -1186,6 +1182,10 @@ impl Workspace {
             }
             SettingsSection::Indicators => usize::from(self.config.symbols),
             SettingsSection::Sound => usize::from(!self.preferences.sound.enabled),
+            SettingsSection::Toast => shell::overlays::TOAST_DELIVERIES
+                .iter()
+                .position(|d| d.eq_ignore_ascii_case(&self.preferences.ui.toast.delivery))
+                .unwrap_or(0),
         }
     }
 
@@ -1226,6 +1226,12 @@ impl Workspace {
             SettingsSection::Indicators if settings.selected == 0 => Edit::StatusIndicators("dots"),
             SettingsSection::Indicators => Edit::StatusIndicators("symbols"),
             SettingsSection::Sound => Edit::Sound(settings.selected == 0),
+            SettingsSection::Toast => Edit::ToastDelivery(
+                shell::overlays::TOAST_DELIVERIES
+                    .get(settings.selected)
+                    .copied()
+                    .unwrap_or("off"),
+            ),
         };
         let saved = crate::preferences::edit(edit).and_then(|()| self.reload_config());
         match saved {

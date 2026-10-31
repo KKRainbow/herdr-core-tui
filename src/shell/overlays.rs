@@ -519,16 +519,21 @@ pub enum SettingsSection {
     Theme,
     Indicators,
     Sound,
+    Toast,
 }
 
+/// Herdr's `ui.toast.delivery` words in its settings order.
+pub const TOAST_DELIVERIES: [&str; 4] = ["off", "herdr", "terminal", "system"];
+
 impl SettingsSection {
-    pub const ALL: &[Self] = &[Self::Theme, Self::Indicators, Self::Sound];
+    pub const ALL: &[Self] = &[Self::Theme, Self::Indicators, Self::Sound, Self::Toast];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
             Self::Sound => "sound",
+            Self::Toast => "toasts",
         }
     }
 
@@ -536,6 +541,7 @@ impl SettingsSection {
         match self {
             Self::Theme => crate::shell::palette::THEME_NAMES.len(),
             Self::Indicators | Self::Sound => 2,
+            Self::Toast => TOAST_DELIVERIES.len(),
         }
     }
 }
@@ -1921,6 +1927,16 @@ fn render_settings(b: &mut Buffer, settings: &Settings, p: &Palette) -> Option<O
             "sound alerts",
             "play sounds when agents change state in background",
             &["on", "off"],
+            settings.selected,
+            p,
+            &mut choice_hits,
+        ),
+        SettingsSection::Toast => render_choice_section(
+            b,
+            content,
+            "notification popups",
+            "choose where background popup notifications should appear",
+            &["off", "inside herder-tui", "via terminal", "via system"],
             settings.selected,
             p,
             &mut choice_hits,

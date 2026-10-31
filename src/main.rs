@@ -7,6 +7,7 @@ mod copy;
 mod editor;
 mod input;
 mod layout;
+mod notify;
 mod paint;
 mod preferences;
 mod scrollback;

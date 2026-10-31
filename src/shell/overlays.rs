@@ -157,6 +157,8 @@ pub fn global_menu_items() -> Vec<(&'static str, MenuAction)> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenameTarget {
+    /// Names a new workspace first, as Herdr's `prompt_new_workspace_name` does.
+    NewSpace,
     Space(String),
     Tab(String),
     Pane(String),

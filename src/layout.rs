@@ -8,7 +8,7 @@ pub struct Pane {
     pub area: Rect,
     /// The terminal's cells inside the frame, after borders and the scrollbar gutter.
     pub content: Rect,
-    pub bordered: bool,
+    pub borders: ratatui::widgets::Borders,
     pub scrollbar: Option<Rect>,
 }
 pub fn panes(root: &Value, area: Rect, focused: Option<&str>, zoomed: Option<&str>) -> Vec<Pane> {
@@ -81,7 +81,7 @@ fn collect(
                 .into(),
             area,
             content: area,
-            bordered: false,
+            borders: ratatui::widgets::Borders::NONE,
             scrollbar: None,
         });
         return;

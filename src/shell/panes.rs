@@ -1,34 +1,112 @@
 //! Pane frames: Herdr draws borders only when a tab shows several panes, joins the
 //! lines into box-drawing junctions, and highlights the focused pane's edges.
-//! Adapted from Herdr `src/ui/panes.rs` with its default `pane_borders = "auto"`,
-//! `pane_outer_borders = true`, and `pane_gaps = true`.
+//! Adapted from Herdr `src/ui/panes.rs`, including `pane_borders`, `pane_outer_borders`,
+//! and `pane_gaps`.
 use super::{chrome::truncate_end, palette::Palette};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
+    widgets::{Block, Borders},
 };
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub rect: Rect,
-    pub bordered: bool,
+    pub borders: Borders,
     pub focused: bool,
     pub label: Option<String>,
 }
 
 /// The cells inside a pane's frame.
-pub fn inner(rect: Rect, bordered: bool) -> Rect {
-    if !bordered {
-        return rect;
+pub fn inner(rect: Rect, borders: Borders) -> Rect {
+    if borders.is_empty() {
+        rect
+    } else {
+        Block::default().borders(borders).inner(rect)
     }
-    Rect::new(
-        rect.x.saturating_add(1),
-        rect.y.saturating_add(1),
-        rect.width.saturating_sub(2),
-        rect.height.saturating_sub(2),
-    )
+}
+
+fn ranges_overlap(a_start: u16, a_len: u16, b_start: u16, b_len: u16) -> bool {
+    a_start < b_start.saturating_add(b_len) && b_start < a_start.saturating_add(a_len)
+}
+
+fn has_right_neighbor(rect: Rect, others: &[Rect]) -> bool {
+    others.iter().any(|other| {
+        *other != rect
+            && other.x == rect.right()
+            && ranges_overlap(rect.y, rect.height, other.y, other.height)
+    })
+}
+
+fn has_neighbor_below(rect: Rect, others: &[Rect]) -> bool {
+    others.iter().any(|other| {
+        *other != rect
+            && other.y == rect.bottom()
+            && ranges_overlap(rect.x, rect.width, other.x, other.width)
+    })
+}
+
+/// Herdr's `apply_pane_chrome`: which edges each pane draws, and the one-cell gap
+/// between borderless split panes. Returns each rect with its borders.
+pub fn apply_chrome(
+    rects: &[Rect],
+    pane_borders: crate::preferences::PaneBorders,
+    pane_gaps: bool,
+    pane_outer_borders: bool,
+) -> Vec<(Rect, Borders)> {
+    let multi_pane = rects.len() > 1;
+    let bordered = pane_borders.shows_borders(multi_pane);
+    let outer_left = rects.iter().map(|r| r.x).min().unwrap_or(0);
+    let outer_top = rects.iter().map(|r| r.y).min().unwrap_or(0);
+    let outer_right = rects.iter().map(|r| r.right()).max().unwrap_or(0);
+    let outer_bottom = rects.iter().map(|r| r.bottom()).max().unwrap_or(0);
+    rects
+        .iter()
+        .map(|&original| {
+            let mut rect = original;
+            let right = multi_pane && has_right_neighbor(original, rects);
+            let below = multi_pane && has_neighbor_below(original, rects);
+            if multi_pane && pane_gaps && !pane_borders.draws_borders() {
+                if right && rect.width > 1 {
+                    rect.width -= 1;
+                }
+                if below && rect.height > 1 {
+                    rect.height -= 1;
+                }
+            }
+            let borders = if !bordered {
+                Borders::NONE
+            } else {
+                let mut borders = Borders::ALL;
+                if !pane_gaps {
+                    if right {
+                        borders.remove(Borders::RIGHT);
+                    }
+                    if below {
+                        borders.remove(Borders::BOTTOM);
+                    }
+                }
+                if !pane_outer_borders {
+                    if rect.x == outer_left {
+                        borders.remove(Borders::LEFT);
+                    }
+                    if rect.y == outer_top {
+                        borders.remove(Borders::TOP);
+                    }
+                    if rect.right() == outer_right {
+                        borders.remove(Borders::RIGHT);
+                    }
+                    if rect.bottom() == outer_bottom {
+                        borders.remove(Borders::BOTTOM);
+                    }
+                }
+                borders
+            };
+            (rect, borders)
+        })
+        .collect()
 }
 
 /// The terminal's cells, leaving Herdr's scrollbar gutter outside the alternate screen.
@@ -71,7 +149,7 @@ fn symbol(line: LineCell) -> &'static str {
     }
 }
 
-fn own_border(x: u16, y: u16, rect: Rect) -> bool {
+fn own_border(x: u16, y: u16, rect: Rect, borders: Borders) -> bool {
     if rect.is_empty() {
         return false;
     }
@@ -79,27 +157,40 @@ fn own_border(x: u16, y: u16, rect: Rect) -> bool {
     let bottom = rect.bottom() - 1;
     let in_rows = y >= rect.y && y <= bottom;
     let in_cols = x >= rect.x && x <= right;
-    (in_rows && (x == rect.x || x == right)) || (in_cols && (y == rect.y || y == bottom))
+    (in_rows
+        && ((x == rect.x && borders.contains(Borders::LEFT))
+            || (x == right && borders.contains(Borders::RIGHT))))
+        || (in_cols
+            && ((y == rect.y && borders.contains(Borders::TOP))
+                || (y == bottom && borders.contains(Borders::BOTTOM))))
 }
 
 pub fn render_borders(buffer: &mut Buffer, frames: &[Frame], palette: &Palette) {
     let mut cells = HashMap::<(u16, u16), LineCell>::new();
-    for frame in frames.iter().filter(|f| f.bordered && !f.rect.is_empty()) {
+    for frame in frames
+        .iter()
+        .filter(|f| !f.borders.is_empty() && !f.rect.is_empty())
+    {
         let rect = frame.rect;
         let right = rect.right() - 1;
         let bottom = rect.bottom() - 1;
-        for x in rect.x..=right {
-            for y in [rect.y, bottom] {
-                let cell = cells.entry((x, y)).or_default();
-                cell.left |= x > rect.x;
-                cell.right |= x < right;
+        let sides = [(Borders::TOP, rect.y), (Borders::BOTTOM, bottom)];
+        for (side, y) in sides {
+            if frame.borders.contains(side) {
+                for x in rect.x..=right {
+                    let cell = cells.entry((x, y)).or_default();
+                    cell.left |= x > rect.x;
+                    cell.right |= x < right;
+                }
             }
         }
-        for y in rect.y..=bottom {
-            for x in [rect.x, right] {
-                let cell = cells.entry((x, y)).or_default();
-                cell.up |= y > rect.y;
-                cell.down |= y < bottom;
+        for (side, x) in [(Borders::LEFT, rect.x), (Borders::RIGHT, right)] {
+            if frame.borders.contains(side) {
+                for y in rect.y..=bottom {
+                    let cell = cells.entry((x, y)).or_default();
+                    cell.up |= y > rect.y;
+                    cell.down |= y < bottom;
+                }
             }
         }
     }
@@ -110,7 +201,7 @@ pub fn render_borders(buffer: &mut Buffer, frames: &[Frame], palette: &Palette) 
         }
         let focused = frames
             .iter()
-            .any(|f| f.bordered && f.focused && own_border(x, y, f.rect));
+            .any(|f| f.focused && own_border(x, y, f.rect, f.borders));
         let symbol = symbol(line);
         if symbol.is_empty() {
             continue;
@@ -124,7 +215,7 @@ pub fn render_borders(buffer: &mut Buffer, frames: &[Frame], palette: &Palette) 
             }));
     }
     for frame in frames {
-        if !frame.bordered || frame.rect.width <= 4 {
+        if !frame.borders.contains(Borders::TOP) || frame.rect.width <= 4 {
             continue;
         }
         let Some(label) = frame
@@ -191,13 +282,13 @@ mod tests {
         let frames = [
             Frame {
                 rect: Rect::new(0, 0, 5, 4),
-                bordered: true,
+                borders: Borders::ALL,
                 focused: false,
                 label: Some("left".into()),
             },
             Frame {
                 rect: Rect::new(5, 0, 5, 4),
-                bordered: true,
+                borders: Borders::ALL,
                 focused: true,
                 label: None,
             },
@@ -208,6 +299,28 @@ mod tests {
         assert_eq!(row(3), "└───┘└───┘");
         assert_eq!(buffer[(5, 1)].fg, palette.accent);
         assert_eq!(buffer[(4, 1)].fg, palette.overlay0);
+    }
+
+    #[test]
+    fn chrome_options_follow_herdr() {
+        use crate::preferences::PaneBorders;
+        let rects = [Rect::new(0, 0, 10, 6), Rect::new(10, 0, 10, 6)];
+        let shared = apply_chrome(&rects, PaneBorders::Auto, false, true);
+        assert_eq!(shared[0].1, Borders::ALL - Borders::RIGHT);
+        assert_eq!(shared[1].1, Borders::ALL);
+        let open = apply_chrome(&rects, PaneBorders::Auto, true, false);
+        assert_eq!(open[0].1, Borders::RIGHT);
+        let gap = apply_chrome(&rects, PaneBorders::Off, true, true);
+        assert_eq!(gap[0], (Rect::new(0, 0, 9, 6), Borders::NONE));
+        assert_eq!(gap[1], (rects[1], Borders::NONE));
+        assert_eq!(
+            apply_chrome(&rects[..1], PaneBorders::Auto, true, true)[0].1,
+            Borders::NONE
+        );
+        assert_eq!(
+            apply_chrome(&rects[..1], PaneBorders::Always, true, true)[0].1,
+            Borders::ALL
+        );
     }
 
     #[test]

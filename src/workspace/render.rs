@@ -20,7 +20,52 @@ impl Workspace {
             }
             self.render_frame(frame)
         })?;
+        self.update_window_title()?;
         Ok(resized)
+    }
+
+    /// Herdr's `ui.window_title` on the outer terminal, written only when it changes.
+    fn update_window_title(&mut self) -> io::Result<()> {
+        use crate::window_title::{Token, hostname, parse, render};
+        let Ok(Some(parts)) = parse(&self.preferences.ui.window_title) else {
+            return Ok(());
+        };
+        let view = self.view();
+        let pane = view
+            .focused
+            .as_deref()
+            .and_then(|id| self.snapshot.pane(id));
+        let title = render(&parts, |token| match token {
+            Token::Hostname if self.machine.is_empty() => Some(hostname()),
+            Token::Hostname => Some(self.machine.clone()),
+            Token::Workspace => view
+                .active_space
+                .as_deref()
+                .and_then(|id| self.snapshot.workspace(id))
+                .map(|w| w.label.clone()),
+            Token::Tab => view
+                .active_tab
+                .as_deref()
+                .and_then(|id| self.snapshot.tab(id))
+                .map(|t| t.label.clone()),
+            Token::Pane => pane.and_then(|p| p.label.clone()),
+            Token::TerminalTitle => pane.and_then(|p| p.terminal.as_deref()).and_then(|local| {
+                let address = qualify(local, &self.machine);
+                self.session
+                    .terminals
+                    .values()
+                    .find(|r| r.address == address)
+                    .map(|r| r.title.clone())
+            }),
+        });
+        if title.is_some() && title != self.window_title {
+            crossterm::execute!(
+                io::stdout(),
+                crossterm::terminal::SetTitle(title.as_deref().unwrap_or_default())
+            )?;
+            self.window_title = title;
+        }
+        Ok(())
     }
 
     fn copy_bar(&self) -> Option<CopyBar> {
@@ -115,9 +160,21 @@ impl Workspace {
             .iter()
             .map(|pane| shell::panes::Frame {
                 rect: pane.area,
-                bordered: pane.bordered,
+                borders: pane.borders,
                 focused: self.peek.is_some() || view.focused.as_deref() == Some(&pane.id),
-                label: self.snapshot.pane(&pane.id).and_then(|p| p.label.clone()),
+                label: self
+                    .snapshot
+                    .pane(&pane.id)
+                    .and_then(|p| p.label.clone())
+                    .or_else(|| {
+                        // Herdr's `show_agent_labels_on_pane_borders`: the agent's name when unnamed.
+                        self.preferences
+                            .ui
+                            .show_agent_labels_on_pane_borders
+                            .then(|| self.snapshot.agents.iter().find(|a| a.pane_id == pane.id))
+                            .flatten()
+                            .and_then(|a| a.agent.clone())
+                    }),
             })
             .collect();
         shell::panes::render_borders(frame.buffer_mut(), &frames, &palette);

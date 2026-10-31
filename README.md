@@ -107,6 +107,8 @@ Set `[theme] name` to a Herdr theme such as `catppuccin`, `tokyo-night`, `dracul
 Set `[ui] status_indicators` to `dots` or `symbols`, `agent_panel_sort` to `spaces` or `priority`, `sidebar_width`, and `accent`.
 Map Herdr `[keys]` action names to one binding or a list, for example `next_agent = "prefix+a"`.
 An empty binding disables an action.
+These Herdr `[ui]` options apply with Herdr's defaults: `sidebar_min_width`, `sidebar_max_width`, `sidebar_start_collapsed`, `sidebar_collapsed_mode`, `mouse_capture`, `copy_on_select`, `mouse_scroll_lines`, `confirm_close`, `prompt_new_tab_name`, `prompt_new_workspace_name`, `pane_borders`, `pane_outer_borders`, `pane_scrollbars`, `pane_gaps`, `show_agent_labels_on_pane_borders`, `hide_tab_bar_when_single_tab`, `tab_bar_position`, and `window_title`.
+`[terminal] default_shell` sets the program new panes run; empty uses core's shell.
 Set `[ui.sound] enabled = false` to silence agents, or give `path`, `done_path`, and `request_path` mp3 files to replace Herdr's sounds.
 An agent asking a question always sounds; a finished agent sounds unless you are watching its pane.
 Sounds play through `paplay`, `pw-play`, `ffplay`, `mpg123`, or `mpv` on Linux and `afplay` on macOS.

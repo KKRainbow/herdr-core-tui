@@ -65,11 +65,14 @@ pub fn key(vt: &mut Vt, event: KeyEvent) -> Vec<u8> {
         },
     )
 }
-pub fn mouse(vt: &mut Vt, event: MouseEvent) -> Vec<u8> {
+/// Encodes a mouse event for the program; without mouse reporting, the wheel
+/// scrolls `scroll_lines` of history instead.
+pub fn mouse(vt: &mut Vt, event: MouseEvent, scroll_lines: usize) -> Vec<u8> {
     if !vt.mouse_tracking() && !vt.alt_screen() {
+        let lines = scroll_lines as isize;
         match event.kind {
-            MouseEventKind::ScrollUp => vt.scroll_viewport(-3),
-            MouseEventKind::ScrollDown => vt.scroll_viewport(3),
+            MouseEventKind::ScrollUp => vt.scroll_viewport(-lines),
+            MouseEventKind::ScrollDown => vt.scroll_viewport(lines),
             _ => {}
         }
         return vec![];

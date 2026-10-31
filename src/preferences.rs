@@ -22,6 +22,101 @@ pub struct Preferences {
     pub worktrees: Worktrees,
     /// Herdr's `[[keys.command]]`: keys that run a command.
     pub commands: Vec<Command>,
+    /// Herdr's other `[ui]` options this client applies.
+    pub ui: Ui,
+    /// Herdr's `[terminal] default_shell`: the program new panes run; empty uses core's shell.
+    pub default_shell: String,
+}
+/// Herdr's `pane_borders`: `auto` frames split panes, `always` a lone pane too, `off` none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaneBorders {
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+impl PaneBorders {
+    pub fn draws_borders(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+    pub fn shows_borders(self, multi_pane: bool) -> bool {
+        self.draws_borders() && (multi_pane || matches!(self, Self::Always))
+    }
+}
+impl<'de> Deserialize<'de> for PaneBorders {
+    /// Herdr's words, or a legacy boolean: true is auto, false is off.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Ok(match toml::Value::deserialize(d)? {
+            toml::Value::Boolean(true) => Self::Auto,
+            toml::Value::Boolean(false) => Self::Off,
+            toml::Value::String(word) if word.eq_ignore_ascii_case("always") => Self::Always,
+            toml::Value::String(word) if word.eq_ignore_ascii_case("off") => Self::Off,
+            _ => Self::Auto,
+        })
+    }
+}
+/// Herdr's `[ui]` options beyond theme, indicators, sorting, and sound, with Herdr's defaults.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Ui {
+    pub sidebar_min_width: u16,
+    pub sidebar_max_width: u16,
+    pub sidebar_start_collapsed: bool,
+    /// `compact` keeps a narrow strip when collapsed; `hidden` removes it.
+    pub sidebar_collapsed_mode: String,
+    pub mouse_capture: bool,
+    pub copy_on_select: bool,
+    pub mouse_scroll_lines: Option<usize>,
+    pub confirm_close: bool,
+    pub prompt_new_tab_name: bool,
+    pub prompt_new_workspace_name: bool,
+    pub pane_borders: PaneBorders,
+    pub pane_outer_borders: bool,
+    pub pane_scrollbars: bool,
+    pub pane_gaps: bool,
+    pub show_agent_labels_on_pane_borders: bool,
+    pub hide_tab_bar_when_single_tab: bool,
+    /// `top` or `bottom`.
+    pub tab_bar_position: String,
+    /// Outer terminal title; tokens `{hostname}`, `{workspace}`, `{tab}`, `{pane}`,
+    /// `{terminal_title}`. Empty leaves the title alone.
+    pub window_title: String,
+}
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            sidebar_min_width: 18,
+            sidebar_max_width: 36,
+            sidebar_start_collapsed: false,
+            sidebar_collapsed_mode: "compact".into(),
+            mouse_capture: true,
+            copy_on_select: true,
+            mouse_scroll_lines: None,
+            confirm_close: true,
+            prompt_new_tab_name: true,
+            prompt_new_workspace_name: false,
+            pane_borders: PaneBorders::Auto,
+            pane_outer_borders: true,
+            pane_scrollbars: true,
+            pane_gaps: true,
+            show_agent_labels_on_pane_borders: false,
+            hide_tab_bar_when_single_tab: false,
+            tab_bar_position: "top".into(),
+            window_title: "{hostname}: {workspace}".into(),
+        }
+    }
+}
+impl Ui {
+    /// Lines a wheel notch scrolls, Herdr's default 3.
+    pub fn scroll_lines(&self) -> usize {
+        self.mouse_scroll_lines.filter(|n| *n > 0).unwrap_or(3)
+    }
+    pub fn tab_bar_bottom(&self) -> bool {
+        self.tab_bar_position.eq_ignore_ascii_case("bottom")
+    }
+    pub fn sidebar_hidden_when_collapsed(&self) -> bool {
+        self.sidebar_collapsed_mode.eq_ignore_ascii_case("hidden")
+    }
 }
 /// One custom command binding, as Herdr's `CommandKeybindConfig`.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -108,6 +203,8 @@ impl Default for Preferences {
             sound: Sound::default(),
             worktrees: Worktrees::default(),
             commands: vec![],
+            ui: Ui::default(),
+            default_shell: String::new(),
         }
     }
 }
@@ -199,6 +296,7 @@ pub fn source_path() -> Option<PathBuf> {
 struct File {
     theme: ThemeFile,
     ui: UiFile,
+    terminal: TerminalFile,
     keys: KeysFile,
     worktrees: Worktrees,
 }
@@ -209,6 +307,11 @@ struct ThemeFile {
     /// Token colors; Herdr's `light`/`dark` tables are skipped.
     custom: BTreeMap<String, toml::Value>,
 }
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct TerminalFile {
+    default_shell: String,
+}
 #[derive(Deserialize)]
 #[serde(default)]
 struct UiFile {
@@ -217,6 +320,8 @@ struct UiFile {
     status_indicators: String,
     agent_panel_sort: String,
     sound: Sound,
+    #[serde(flatten)]
+    options: Ui,
 }
 impl Default for UiFile {
     fn default() -> Self {
@@ -227,6 +332,7 @@ impl Default for UiFile {
             status_indicators: defaults.status_indicators,
             agent_panel_sort: defaults.agent_panel_sort,
             sound: Sound::default(),
+            options: Ui::default(),
         }
     }
 }
@@ -276,6 +382,8 @@ impl Preferences {
             sound,
             worktrees: file.worktrees,
             commands: file.keys.command,
+            ui: file.ui.options,
+            default_shell: file.terminal.default_shell,
         })
     }
 }
@@ -399,9 +507,24 @@ unknown = 1
         );
         let palette = p.palette(&p.theme);
         assert_eq!(palette.accent, ratatui::style::Color::Rgb(255, 0, 0));
+        assert_eq!(p.ui, Ui::default());
         let keys = p.keymap();
         assert_eq!(keys.label("new_tab"), "prefix+c");
         assert_eq!(keys.prefix_label(), "ctrl+a");
+    }
+
+    #[test]
+    fn ui_options_follow_herdr_including_legacy_booleans() {
+        let p = Preferences::parse(
+            "[ui]\npane_borders = false\ntab_bar_position = \"bottom\"\nconfirm_close = false\nmouse_scroll_lines = 5\n[terminal]\ndefault_shell = \"fish\"\n",
+            None,
+        )
+        .unwrap();
+        assert_eq!(p.ui.pane_borders, PaneBorders::Off);
+        assert!(p.ui.tab_bar_bottom() && !p.ui.confirm_close);
+        assert_eq!(p.ui.scroll_lines(), 5);
+        assert_eq!(p.default_shell, "fish");
+        assert!(p.ui.prompt_new_tab_name && p.ui.copy_on_select);
     }
 
     #[test]

@@ -86,25 +86,65 @@ pub struct Layout {
     pub pane_surface: Rect,
 }
 
-/// Herdr's desktop layout: sidebar on the left, tab bar on top of the panes.
-pub fn layout(cols: u16, rows: u16, sidebar_width: u16, collapsed: bool) -> Layout {
-    let sidebar_width = if collapsed {
-        SIDEBAR_COLLAPSED_WIDTH
+/// Where the tab row goes, from Herdr's `tab_bar_position` and `hide_tab_bar_when_single_tab`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabBar {
+    #[default]
+    Top,
+    Bottom,
+    Hidden,
+}
+
+/// Herdr's sidebar and tab-row options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shape {
+    pub sidebar_width: u16,
+    pub collapsed: bool,
+    /// Herdr's `sidebar_collapsed_mode = "hidden"` leaves no strip.
+    pub hidden_when_collapsed: bool,
+    pub min_width: u16,
+    pub max_width: u16,
+    pub tab_bar: TabBar,
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self {
+            sidebar_width: 26,
+            collapsed: false,
+            hidden_when_collapsed: false,
+            min_width: SIDEBAR_MIN_WIDTH,
+            max_width: SIDEBAR_MAX_WIDTH,
+            tab_bar: TabBar::Top,
+        }
+    }
+}
+
+/// Herdr's desktop layout: sidebar on the left, the tab row above (or below) the panes.
+pub fn layout(cols: u16, rows: u16, shape: Shape) -> Layout {
+    let sidebar_width = if shape.collapsed {
+        if shape.hidden_when_collapsed {
+            0
+        } else {
+            SIDEBAR_COLLAPSED_WIDTH
+        }
     } else {
-        sidebar_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        let max = shape.max_width.max(shape.min_width);
+        shape.sidebar_width.clamp(shape.min_width, max)
     }
     .min(cols.saturating_sub(1));
-    let tab_height = u16::from(rows > 1);
+    let tab_height = u16::from(rows > 1 && shape.tab_bar != TabBar::Hidden);
     let main_width = cols.saturating_sub(sidebar_width);
+    let panes_height = rows.saturating_sub(tab_height);
+    let (tab_y, panes_y) = if shape.tab_bar == TabBar::Bottom {
+        (panes_height, 0)
+    } else {
+        (0, tab_height)
+    };
     Layout {
         sidebar: Rect::new(0, 0, sidebar_width, rows),
-        tab_bar: Rect::new(sidebar_width, 0, main_width, tab_height),
-        pane_surface: Rect::new(
-            sidebar_width,
-            tab_height,
-            main_width,
-            rows.saturating_sub(tab_height),
-        ),
+        tab_bar: Rect::new(sidebar_width, tab_y, main_width, tab_height),
+        pane_surface: Rect::new(sidebar_width, panes_y, main_width, panes_height),
     }
 }
 
@@ -113,14 +153,56 @@ mod tests {
     use super::*;
     #[test]
     fn layout_clamps_the_sidebar_and_puts_tabs_above_panes() {
-        let l = layout(140, 40, 26, false);
+        let shape = Shape::default();
+        let l = layout(140, 40, shape);
         assert_eq!(l.sidebar, Rect::new(0, 0, 26, 40));
         assert_eq!(l.tab_bar, Rect::new(26, 0, 114, 1));
         assert_eq!(l.pane_surface, Rect::new(26, 1, 114, 39));
-        assert_eq!(layout(140, 40, 80, false).sidebar.width, SIDEBAR_MAX_WIDTH);
+        let wide = Shape {
+            sidebar_width: 80,
+            ..shape
+        };
+        assert_eq!(layout(140, 40, wide).sidebar.width, SIDEBAR_MAX_WIDTH);
+        let collapsed = Shape {
+            collapsed: true,
+            ..shape
+        };
         assert_eq!(
-            layout(140, 40, 26, true).sidebar.width,
+            layout(140, 40, collapsed).sidebar.width,
             SIDEBAR_COLLAPSED_WIDTH
         );
+    }
+
+    #[test]
+    fn herdr_options_move_or_hide_the_tab_row_and_sidebar() {
+        let shape = Shape::default();
+        let bottom = layout(
+            100,
+            20,
+            Shape {
+                tab_bar: TabBar::Bottom,
+                ..shape
+            },
+        );
+        assert_eq!(bottom.tab_bar, Rect::new(26, 19, 74, 1));
+        assert_eq!(bottom.pane_surface, Rect::new(26, 0, 74, 19));
+        let hidden = layout(
+            100,
+            20,
+            Shape {
+                tab_bar: TabBar::Hidden,
+                collapsed: true,
+                hidden_when_collapsed: true,
+                ..shape
+            },
+        );
+        assert_eq!(hidden.pane_surface, Rect::new(0, 0, 100, 20));
+        let narrow = Shape {
+            sidebar_width: 10,
+            min_width: 12,
+            max_width: 30,
+            ..shape
+        };
+        assert_eq!(layout(100, 20, narrow).sidebar.width, 12);
     }
 }

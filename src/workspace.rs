@@ -101,6 +101,8 @@ pub struct Workspace {
     notification_target: Option<String>,
     /// Scrollback text waiting to open in `$EDITOR` once the loop can hand over the host.
     pending_editor: Option<String>,
+    /// The outer terminal title last written, from Herdr's `ui.window_title`.
+    window_title: Option<String>,
     drag: Option<Drag>,
     pub session: Session,
     pub views: BTreeMap<String, View>,
@@ -328,15 +330,38 @@ impl Workspace {
     }
     fn geometry(&mut self, area: Rect) {
         self.area = area;
+        let view = self.view();
+        let ui = &self.preferences.ui;
+        let single_tab = ui.hide_tab_bar_when_single_tab
+            && view.active_space.as_ref().is_some_and(|space| {
+                self.snapshot
+                    .tabs
+                    .iter()
+                    .filter(|t| &t.workspace_id == space)
+                    .count()
+                    == 1
+            });
+        let tab_bar = if single_tab {
+            shell::TabBar::Hidden
+        } else if ui.tab_bar_bottom() {
+            shell::TabBar::Bottom
+        } else {
+            shell::TabBar::Top
+        };
         self.layout = shell::layout(
             area.width,
             area.height,
-            self.sidebar_width,
-            self.sidebar_collapsed,
+            shell::Shape {
+                sidebar_width: self.sidebar_width,
+                collapsed: self.sidebar_collapsed,
+                hidden_when_collapsed: ui.sidebar_hidden_when_collapsed(),
+                min_width: ui.sidebar_min_width,
+                max_width: ui.sidebar_max_width,
+                tab_bar,
+            },
         );
         let body = self.layout.pane_surface;
         self.panes.clear();
-        let view = self.view();
         if let Some(address) = &self.peek {
             self.panes.push(Pane {
                 id: format!("@{address}"),
@@ -344,7 +369,7 @@ impl Workspace {
                 description: "Terminal".into(),
                 area: body,
                 content: body,
-                bordered: false,
+                borders: ratatui::widgets::Borders::NONE,
                 scrollbar: None,
             });
         } else if let Some(doc) = self.document()
@@ -355,10 +380,30 @@ impl Workspace {
                 .and_then(|t| t.get("root"))
         {
             self.panes = layout::panes(root, body, view.focused.as_deref(), view.zoomed.as_deref());
+            let ui = &self.preferences.ui;
             let tab_panes = layout::navigation_ids(root).len();
-            let bordered = self.panes.len() > 1 || (view.zoomed.is_some() && tab_panes > 1);
-            for pane in &mut self.panes {
-                pane.bordered = bordered;
+            if view.zoomed.is_some() {
+                // Herdr's zoomed pane: framed when borders show for the tab and outer edges draw.
+                let framed = ui.pane_borders.shows_borders(tab_panes > 1) && ui.pane_outer_borders;
+                for pane in &mut self.panes {
+                    pane.borders = if framed {
+                        ratatui::widgets::Borders::ALL
+                    } else {
+                        ratatui::widgets::Borders::NONE
+                    };
+                }
+            } else {
+                let rects: Vec<Rect> = self.panes.iter().map(|p| p.area).collect();
+                let chrome = shell::panes::apply_chrome(
+                    &rects,
+                    ui.pane_borders,
+                    ui.pane_gaps,
+                    ui.pane_outer_borders,
+                );
+                for (pane, (rect, borders)) in self.panes.iter_mut().zip(chrome) {
+                    pane.area = rect;
+                    pane.borders = borders;
+                }
             }
         }
         for pane in &mut self.panes {
@@ -367,8 +412,8 @@ impl Workspace {
                 .get(&pane.id)
                 .is_some_and(|s| s.vt.alt_screen());
             let (content, scrollbar) = shell::panes::terminal_rect(
-                shell::panes::inner(pane.area, pane.bordered),
-                alternate,
+                shell::panes::inner(pane.area, pane.borders),
+                alternate || !self.preferences.ui.pane_scrollbars,
             );
             pane.content = content;
             pane.scrollbar = scrollbar;
@@ -670,7 +715,20 @@ impl Workspace {
         }
     }
     fn reload_config(&mut self) -> Result<()> {
+        let capture = self.preferences.ui.mouse_capture;
         self.preferences = preferences::load()?;
+        if capture != self.preferences.ui.mouse_capture {
+            crate::MOUSE_CAPTURE.store(
+                self.preferences.ui.mouse_capture,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            if self.preferences.ui.mouse_capture {
+                crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+            } else {
+                crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
+            }
+        }
+        self.window_title = None;
         let sort = self.config.sort;
         self.config = self.preferences.shell();
         if self.chrome_saved.agent_panel_sort.is_some() {
@@ -823,6 +881,7 @@ pub async fn run(
         listed_once: false,
         notification_target: None,
         pending_editor: None,
+        window_title: None,
         drag: None,
         session,
         views: preferences::read_views(&view_key),
@@ -844,7 +903,7 @@ pub async fn run(
         sidebar_width: chrome_saved
             .sidebar_width
             .unwrap_or(preferences.sidebar_width),
-        sidebar_collapsed: chrome_saved.sidebar_collapsed,
+        sidebar_collapsed: chrome_saved.sidebar_collapsed || preferences.ui.sidebar_start_collapsed,
         chrome_saved,
         config: shell_config,
         keys: preferences.keymap(),
@@ -874,6 +933,10 @@ pub async fn run(
         crate::restore();
         previous(info);
     }));
+    crate::MOUSE_CAPTURE.store(
+        app.preferences.ui.mouse_capture,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let _host = Host::enter()?;
     let mut screen = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut events = EventStream::new();

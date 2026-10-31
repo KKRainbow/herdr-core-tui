@@ -261,8 +261,12 @@ impl Workspace {
             }
             "goto" => self.overlay = Some(Overlay::Navigator(Navigator::default())),
             "new_workspace" => {
-                self.run("space.new", json!({})).await;
-                self.invalidate_git();
+                if self.preferences.ui.prompt_new_workspace_name {
+                    self.open_rename(RenameTarget::NewSpace);
+                } else {
+                    self.run("space.new", json!({})).await;
+                    self.invalidate_git();
+                }
             }
             "new_worktree" => {
                 if let Some(space) = focused_space {
@@ -295,7 +299,7 @@ impl Workspace {
             "previous_agent" | "next_agent" => self.cycle_agent(action == "previous_agent"),
             "new_tab" => {
                 if let Some(space) = focused_space {
-                    self.open_rename(RenameTarget::NewTab(space));
+                    self.new_tab(space).await;
                 }
             }
             "rename_tab" => {
@@ -592,6 +596,7 @@ impl Workspace {
                     .and_then(|p| p.label.clone())
                     .unwrap_or_default(),
             ),
+            RenameTarget::NewSpace => ("new workspace", String::new()),
             RenameTarget::NewTab(space) => (
                 "new tab",
                 (self
@@ -620,6 +625,10 @@ impl Workspace {
         rename.input.trim_and_accept();
         let name = rename.input.as_str().to_owned();
         match rename.target {
+            RenameTarget::NewSpace => {
+                self.run("space.new", json!({"name":name})).await;
+                self.invalidate_git();
+            }
             RenameTarget::NewTab(space) => {
                 let number = (self
                     .snapshot
@@ -665,12 +674,31 @@ impl Workspace {
         let Some(review) = self.run(command, json!({"id":id})).await else {
             return;
         };
-        self.overlay = Some(Overlay::Confirm(Confirm {
+        self.ask(Confirm {
             title,
             detail,
             command: command.into(),
             args: json!({"id":id,"confirm":true,"expected":review}),
-        }));
+        })
+        .await;
+    }
+
+    /// Shows a reviewed close, or runs it at once with Herdr's `confirm_close = false`.
+    async fn ask(&mut self, confirm: Confirm) {
+        if self.preferences.ui.confirm_close {
+            self.overlay = Some(Overlay::Confirm(confirm));
+        } else {
+            self.accept_confirm(confirm).await;
+        }
+    }
+
+    /// Herdr's `prompt_new_tab_name`: ask for a name first, else create it at once.
+    async fn new_tab(&mut self, space: String) {
+        if self.preferences.ui.prompt_new_tab_name {
+            self.open_rename(RenameTarget::NewTab(space));
+        } else {
+            self.run("tab.new", json!({"space":space})).await;
+        }
     }
 
     async fn request_workspace_close(&mut self, space: &str, group: Option<bool>) {
@@ -706,12 +734,13 @@ impl Workspace {
                 workspace.label,
                 members.len()
             );
-            self.overlay = Some(Overlay::Confirm(Confirm {
+            self.ask(Confirm {
                 title: "Close worktree group?".into(),
                 detail,
                 command: "space.close.group".into(),
                 args: json!({"ids":members,"confirm":true,"expected":review}),
-            }));
+            })
+            .await;
         } else {
             self.confirm(
                 "Close workspace?".into(),
@@ -1583,7 +1612,7 @@ impl Workspace {
             }
             (A::NewTab, Some(MenuTarget::Tab { tab_id })) => {
                 if let Some(space) = self.snapshot.tab(&tab_id).map(|t| t.workspace_id.clone()) {
-                    self.open_rename(RenameTarget::NewTab(space));
+                    self.new_tab(space).await;
                 }
             }
             (A::Rename, Some(MenuTarget::Tab { tab_id })) => {
@@ -2427,8 +2456,13 @@ impl Workspace {
                 }
             }
             Drag::Sidebar => {
-                self.sidebar_width =
-                    (x + 1).clamp(shell::SIDEBAR_MIN_WIDTH, shell::SIDEBAR_MAX_WIDTH);
+                self.sidebar_width = (x + 1).clamp(
+                    self.preferences.ui.sidebar_min_width,
+                    self.preferences
+                        .ui
+                        .sidebar_max_width
+                        .max(self.preferences.ui.sidebar_min_width),
+                );
                 if released {
                     self.save_chrome();
                 } else {
@@ -2475,7 +2509,7 @@ impl Workspace {
                         let text = copy.text();
                         let moved = copy.cursor != copy.anchor;
                         surface.copy = None;
-                        if moved && !text.is_empty() {
+                        if moved && !text.is_empty() && self.preferences.ui.copy_on_select {
                             clipboard(&text)?;
                             self.toast("copied to clipboard", false);
                         }
@@ -2508,6 +2542,7 @@ impl Workspace {
         }
         mouse.column -= content.x;
         mouse.row -= content.y;
+        let scroll_lines = self.preferences.ui.scroll_lines();
         let Some(surface) = self.surfaces.get_mut(&id) else {
             return Ok(());
         };
@@ -2529,7 +2564,7 @@ impl Workspace {
             self.drag = Some(Drag::Select(id));
             return Ok(());
         }
-        let bytes = input::mouse(&mut surface.vt, mouse);
+        let bytes = input::mouse(&mut surface.vt, mouse, scroll_lines);
         if !bytes.is_empty()
             && let Some(stream) = &surface.stream
         {

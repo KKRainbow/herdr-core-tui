@@ -404,6 +404,13 @@ pub async fn execute(
             .launch_directory(machine, &placement, text(&args, "folder"))
             .await?;
         let argv = match args.get("argv") {
+            // Herdr's `[terminal] default_shell` for plain new panes; empty uses core's shell.
+            None if args.get("line").is_none() => crate::preferences::load()
+                .ok()
+                .map(|p| p.default_shell)
+                .filter(|shell| !shell.trim().is_empty())
+                .into_iter()
+                .collect(),
             None => vec![],
             Some(value) => serde_json::from_value::<Vec<String>>(value.clone())?,
         };

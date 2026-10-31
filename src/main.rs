@@ -13,6 +13,7 @@ mod scrollback;
 mod shell;
 mod sound;
 mod vt;
+mod window_title;
 mod workspace;
 use crossterm::{
     cursor,
@@ -32,6 +33,8 @@ use std::{
     time::Duration,
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+/// Herdr's `ui.mouse_capture`: when off, the host terminal keeps its own mouse handling.
+pub static MOUSE_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 struct Host;
 impl Host {
     fn enter() -> io::Result<Self> {
@@ -41,12 +44,14 @@ impl Host {
     }
     fn modes() -> io::Result<()> {
         terminal::enable_raw_mode()?;
+        if MOUSE_CAPTURE.load(std::sync::atomic::Ordering::Relaxed) {
+            execute!(stdout(), event::EnableMouseCapture)?;
+        }
         execute!(
             stdout(),
             EnterAlternateScreen,
             event::EnableBracketedPaste,
             event::EnableFocusChange,
-            event::EnableMouseCapture,
             event::PushKeyboardEnhancementFlags(
                 event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -242,7 +247,7 @@ async fn run() -> Result<()> {
                     }
                     Event::FocusLost => stream.focus(false).await,
                     Event::Mouse(mouse) => {
-                        let bytes = input::mouse(&mut vt, mouse);
+                        let bytes = input::mouse(&mut vt, mouse, 3);
                         dirty = true;
                         if bytes.is_empty() {
                             Ok(())

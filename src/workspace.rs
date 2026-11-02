@@ -191,6 +191,35 @@ impl Workspace {
     fn document(&self) -> Option<herdr_client_lib::document::Document> {
         self.session.document(&self.machine).ok()
     }
+    async fn close_finished(&mut self) -> bool {
+        let machines = self
+            .session
+            .documents
+            .iter()
+            .filter(|(_, slot)| slot.document.is_some())
+            .map(|(machine, _)| machine.clone())
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for machine in machines {
+            use herdr_client_lib::sync::WriteOutcome;
+            match self.session.reconcile_finished(&machine).await {
+                Ok(None) => {}
+                Ok(Some(WriteOutcome::Written | WriteOutcome::Conflict)) => changed = true,
+                Ok(Some(WriteOutcome::Unavailable(error))) => {
+                    self.toast(format!("Pane cleanup failed: {error}"), true);
+                    changed = true;
+                }
+                Err(error) => {
+                    self.toast(format!("Pane cleanup failed: {error}"), true);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.reconcile();
+        }
+        changed
+    }
     async fn recover_placements(&mut self) -> bool {
         let outcomes = self.session.reconcile_placements().await;
         if outcomes.is_empty() {
@@ -946,6 +975,7 @@ pub async fn run(
     if !app.session.documents.contains_key(&app.machine) {
         app.session.refresh(&app.machine).await;
     }
+    app.close_finished().await;
     app.recover_placements().await;
     app.seed_startup_space().await;
     app.reconcile();
@@ -1133,6 +1163,7 @@ pub async fn run(
                     app.toast(e.to_string(), true);
                 }
                 if !matches!(notification, Notification::Heartbeat { .. }) {
+                    app.close_finished().await;
                     app.notification(&notification);
                     dirty = true;
                 }
@@ -1156,6 +1187,7 @@ pub async fn run(
                     dirty = true;
                 }
                 if connected {
+                    dirty |= app.close_finished().await;
                     dirty |= app.recover_placements().await;
                 }
                 app.save_attention();
@@ -1179,6 +1211,7 @@ pub async fn run(
                                     app.toast(e.to_string(), true);
                                 }
                                 app.toast("Reconnected", false);
+                                app.close_finished().await;
                                 app.reconcile();
                                 dirty = true;
                             }

@@ -100,6 +100,8 @@ Paste through the host terminal's paste command.
 
 Closing a workspace asks for confirmation.
 Closing a tab or pane asks only when it would close the workspace.
+When a shell exits, its pane closes as soon as core confirms the exit.
+The last pane also closes its tab and workspace.
 Worktree removal revalidates the checkout before it deletes it.
 
 ## Configuration

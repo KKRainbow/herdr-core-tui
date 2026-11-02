@@ -1,4 +1,4 @@
-"""Preserve future app content and stop retrying completed terminals."""
+"""Preserve future app content when completed terminal panes close."""
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,termios,threading,time
 from fixture import Core
 binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herder-tui")).resolve()
@@ -29,6 +29,11 @@ try:
  assert b"Unsupported"in output,output[-2000:]
  core.rpc("terminal.kill",{"terminal":created["terminal"]["address"]})
  time.sleep(1)
+ after=core.rpc("doc.get",{"name":"herdr-app"})["value"]
+ assert created["pane"] not in json.dumps(after),after
+ assert after["future-root"]==document["future-root"]
+ assert after["spaces"][0]["tabs"][0]["root"]["children"][0]["content"]==unknown["content"]
+ assert "FINISHED_FIXTURE" in core.rpc("terminal.read",{"terminal":created["terminal"]["address"]})["text"]
  before=cli("--instance","compat","view","state")["metrics"]
  time.sleep(3)
  after=cli("--instance","compat","view","state")["metrics"]
@@ -37,10 +42,10 @@ try:
  output.clear()
  process=subprocess.Popen([str(binary),"--session",core.env["HC_SESSION"],"--instance","compat"],env=core.env,stdin=slave,stdout=slave,stderr=slave)
  end=time.monotonic()+10
- while b"FINISHED_FIXTURE"not in output and time.monotonic()<end:time.sleep(.1)
- assert b"FINISHED_FIXTURE"in output,output[-2000:]
+ while b"Unsupported"not in output and time.monotonic()<end:time.sleep(.1)
+ assert b"Unsupported"in output,output[-2000:]
  cli("--instance","compat","view","quit");assert process.wait(timeout=5)==0
- print("PASS: unknown mod placeholder, lossless unrelated edit, finished terminal retained without retry/redraw loop")
+ print("PASS: unknown mod placeholder preserved, finished pane removed, core output retained, no retry/redraw loop")
 finally:
  if process and process.poll()is None:process.kill();process.wait()
  stop.set()

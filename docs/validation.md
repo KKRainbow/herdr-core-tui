@@ -20,7 +20,7 @@ Original Herdr, app, core, and Libertty source checkouts were not changed.
 | Host errors | Attach failure and injected save error restore terminal settings |
 | Agent reports | Synthetic OSC 7501 status and keyboard navigation without a pane |
 | Unknown content | Mod placeholder and lossless unrelated edits preserve opaque properties |
-| Completed terminal | Retained output; no repeated attach or redraw loop |
+| Completed terminal | Pane closes; core retains output; no repeated attach or redraw loop |
 | Geometry | Two different host sizes, input transfers ownership, no idle resize contention |
 | Remote machine | Unavailable layout, rejected offline mutation, refreshed offline edit, same process after reconnect |
 | Performance | One and fifteen populated panes; idle, visible output, hidden output |
@@ -86,5 +86,18 @@ The local control endpoint uses Unix sockets, and named pipes for the current us
 Native macOS and Windows behavior is unvalidated.
 Clipboard writes use native helpers when present, else host OSC 52 support.
 Kitty graphics use clipped half-block cells; virtual placements and pixel-perfect rendering are unsupported.
-Completed terminals use core's retained text when no live stream is available.
+Completed terminal output remains readable through core after its pane closes.
 Host restoration is guaranteed for handled exits and panics, not SIGKILL or a host terminal crash.
+
+## Shell exit cleanup
+
+Rechecked on Linux on 2026-11-02 with hc 0.1.17.
+Before the fix, Ctrl+D finished the shell but left its split in the shared layout.
+The isolated `pane_exit.py` test now closes that split in 11 ms.
+It also covers output from a neighboring pane, focus fallback, hidden tabs, kept-shell recovery, final workspace closure, startup cleanup, and host restoration.
+
+Both repositories pass `just check`; the TUI has 59 passing fast tests.
+The TUI checks used an isolated copy to exclude concurrent changes in `src/vt.rs`.
+The library real-core suite and TUI PTY lifecycle, startup, compatibility, remote, geometry, and CLI checks pass.
+Finished panes close through version-checked library edits, with retries after conflicts.
+Missing records, lost live terminals, and unavailable machine documents do not trigger closure.

@@ -66,3 +66,16 @@ Validation: both check suites and the isolated core integration passed.
 New transport tests verify one underlying write for a small batch, exact credit totals, ordering, bounded queue draining, overflow handling, and immediate sparse flushes.
 The one-pane repaint samples were 5.59% before and 4.86% after, with 387 and 394 renders.
 Other samples had materially different render counts under continued compiler load, so no reliable incremental CPU saving is claimed.
+
+## 5. Update terminal projections incrementally
+
+A terminal event now replaces or removes only its projected record.
+Full snapshots and machine identity changes still rebuild the map.
+Machine aliases retain the same record selection as a full projection.
+Validation: both check suites passed.
+The regression test compares incremental output with full projection after changes, removals, restarts, new records, unknown machines, and snapshot replacement.
+It also checks that unrelated records keep their string storage.
+The final metadata-event samples were 3.00% versus 3.25% for one pane and 5.11% versus 5.11% for fifteen panes.
+The fifteen-pane samples each rendered 390 times over eight seconds.
+No measurable CPU saving is claimed for this small-record fixture.
+Use `TUI_PERF_MODE=metadata` to measure terminal label events instead of terminal bytes.

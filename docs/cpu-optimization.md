@@ -56,3 +56,13 @@ The library's isolated core integration suite also passed, including document co
 The new test checks shared storage, unavailable documents, private edits, and unknown-field preservation.
 CPU samples were inconclusive because unrelated host compilation raised load near 29 and changed redraw rates and RPC latency.
 No incremental CPU saving is claimed for this step.
+
+## 4. Batch framed transport I/O
+
+Buffer reads and writes, encode each header together, and drain queued frames in bounded batches.
+Merge adjacent credits for the same channel without adding a timer.
+Preserve control priority and flush even a single credit immediately.
+Validation: both check suites and the isolated core integration passed.
+New transport tests verify one underlying write for a small batch, exact credit totals, ordering, bounded queue draining, overflow handling, and immediate sparse flushes.
+The one-pane repaint samples were 5.59% before and 4.86% after, with 387 and 394 renders.
+Other samples had materially different render counts under continued compiler load, so no reliable incremental CPU saving is claimed.

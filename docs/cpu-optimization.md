@@ -4,7 +4,8 @@ Measured on 2026-11-02 at 180 columns by 50 rows.
 CPU is TUI process time divided by elapsed time; 100% is one core.
 Core, proxy, and workload processes are excluded.
 Each visible sample lasts eight seconds after one second of output warmup.
-Each pane emits output at 50 Hz.
+Scroll and repaint panes emit output at 50 Hz.
+Metadata samples send label changes to one terminal, with a 20 ms pause between requests.
 Scroll appends lines; repaint changes a fixed screen row.
 Baseline and candidate run consecutively for each workload.
 Short samples vary with host load and CPU frequency; these are local measurements, not guarantees.
@@ -79,3 +80,35 @@ The final metadata-event samples were 3.00% versus 3.25% for one pane and 5.11% 
 The fifteen-pane samples each rendered 390 times over eight seconds.
 No measurable CPU saving is claimed for this small-record fixture.
 Use `TUI_PERF_MODE=metadata` to measure terminal label events instead of terminal bytes.
+
+## 6. Poll streams without per-pane futures
+
+Expose `Stream::poll_next` and keep the existing async `next` API.
+The TUI now polls receivers directly instead of building a vector of boxed futures on each loop pass.
+Validation: both check suites, all sixteen TUI integration scripts, 400 streaming resizes, and two-viewer geometry passed.
+The new stream test verifies wakeup registration, ordered data after a pending poll, and closure.
+Incremental CPU samples varied across workloads, so no separate saving is attributed to this step.
+The final idle and hidden-output checks measured 0% CPU, zero redraws, and zero parsed bytes for one and fifteen panes.
+
+## Final comparison
+
+Baseline: TUI `8e23de0` with client library `653ee30`.
+Candidate: all six changes above, built in release mode.
+The table shows the mean of two eight-second samples per binary and workload.
+The first sequence ran baseline, item 5, then final; the repeat ran final before baseline.
+Both run orders reduced CPU for every workload.
+Absolute readings still varied with host conditions.
+These synthetic fixtures measure TUI CPU, not a live Codex session or total core/proxy CPU.
+
+| Workload | Panes | Baseline mean CPU % | Final mean CPU % | Relative saving |
+|---|---:|---:|---:|---:|
+| scroll | 1 | 10.23 | 5.34 | 47.8% |
+| scroll | 15 | 19.11 | 13.55 | 29.1% |
+| repaint | 1 | 10.36 | 3.91 | 62.3% |
+| repaint | 15 | 24.39 | 13.36 | 45.3% |
+
+[Raw samples](cpu-optimization.json) include elapsed time, redraws, parsed bytes, RPC latency, and binary hashes.
+The largest confirmed gains came from retained rows and event-specific invalidation.
+The smaller library changes reduce known work, but their individual CPU gains were not consistently measurable.
+The release binary is `target/release/herder-tui`.
+Existing running processes do not pick up the changes until restarted with the new binary.

@@ -20,7 +20,7 @@ use crate::{
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use futures_util::{StreamExt, future::select_all};
+use futures_util::StreamExt;
 use herdr_client_lib::{
     client::{Error, Stream, StreamEvent},
     commands::qualify,
@@ -884,19 +884,17 @@ fn machine_names(machines: &MachineList) -> Vec<String> {
 async fn next_output(
     surfaces: &mut BTreeMap<String, Surface>,
 ) -> (String, std::result::Result<Option<StreamEvent>, Error>) {
-    let futures: Vec<_> = surfaces
-        .iter_mut()
-        .filter_map(|(id, s)| {
-            s.stream
-                .as_mut()
-                .map(|stream| Box::pin(async move { (id.clone(), stream.next().await) }))
-        })
-        .collect();
-    if futures.is_empty() {
-        std::future::pending().await
-    } else {
-        select_all(futures).await.0
-    }
+    std::future::poll_fn(|cx| {
+        for (id, surface) in surfaces.iter_mut() {
+            if let Some(stream) = &mut surface.stream
+                && let std::task::Poll::Ready(event) = stream.poll_next(cx)
+            {
+                return std::task::Poll::Ready((id.clone(), event));
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
 }
 pub async fn run(
     config: HcConfig,

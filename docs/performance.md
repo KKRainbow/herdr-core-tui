@@ -35,3 +35,5 @@ No long-duration memory leak claim is made from this short profile.
 Run `just profile` to repeat the measurements with isolated scratch cores.
 Set `TUI_PERF_SECONDS` to extend each sample and `TUI_PERF_OUTPUT` to save JSON.
 Use `TUI_PERF_PANES` to select a single pane count.
+
+See [CPU optimization measurements](cpu-optimization.md) for the 2026-11-02 changes and before/after results.

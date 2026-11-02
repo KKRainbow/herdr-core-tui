@@ -1,6 +1,6 @@
 //! Terminal parsing, cell extraction, and input encoding adapted from herdr-app.
 use ghostty_sys::*;
-use std::ffi::c_void;
+use std::{ffi::c_void, sync::Arc};
 const BRACKETED_PASTE: GhosttyMode = 2004;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -29,7 +29,7 @@ pub struct Cell {
 
 #[derive(Clone)]
 pub struct Frame {
-    pub rows: Vec<Vec<Cell>>,
+    pub rows: Vec<Arc<Vec<Cell>>>,
     pub cursor: Option<(u16, u16)>,
     pub bg: Rgb,
 }
@@ -116,6 +116,8 @@ fn install_png_decoder() {
 pub struct Vt {
     /// A requested local clear waiting for the stream to reach ground.
     clear_pending: bool,
+    cached_rows: Vec<Arc<Vec<Cell>>>,
+    cached_colors: Option<(Rgb, Rgb, u16, u16)>,
     term: GhosttyTerminal,
     state: GhosttyRenderState,
     rows_it: GhosttyRenderStateRowIterator,
@@ -136,6 +138,8 @@ impl Vt {
         unsafe {
             let mut vt = Self {
                 clear_pending: false,
+                cached_rows: Vec::new(),
+                cached_colors: None,
                 term: std::ptr::null_mut(),
                 state: std::ptr::null_mut(),
                 rows_it: std::ptr::null_mut(),
@@ -521,8 +525,21 @@ impl Vt {
                 GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                 &mut self.rows_it as *mut _ as *mut c_void,
             );
-            let mut rows = Vec::with_capacity(self.rows as usize);
-            while ghostty_render_state_row_iterator_next(self.rows_it) {
+            let colors_key = (
+                colors.foreground.into(),
+                colors.background.into(),
+                self.cols,
+                self.rows,
+            );
+            let full = self.cached_colors != Some(colors_key);
+            self.cached_rows
+                .resize_with(self.rows as usize, || Arc::new(Vec::new()));
+            let mut y = 0;
+            while if full {
+                ghostty_render_state_row_iterator_next(self.rows_it)
+            } else {
+                ghostty_render_state_row_iterator_next_dirty(self.rows_it, &mut y)
+            } {
                 ghostty_render_state_row_get(
                     self.rows_it,
                     GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
@@ -532,8 +549,12 @@ impl Vt {
                 while ghostty_render_state_row_cells_next(self.cells) {
                     row.push(self.read_cell(colors.foreground.into(), colors.background.into()));
                 }
-                rows.push(row);
+                self.cached_rows[y as usize] = Arc::new(row);
+                if full {
+                    y += 1;
+                }
             }
+            self.cached_colors = Some(colors_key);
             let mut cursor = GhosttyRenderStateCursor {
                 size: std::mem::size_of::<GhosttyRenderStateCursor>(),
                 ..Default::default()
@@ -545,7 +566,7 @@ impl Vt {
             );
             ghostty_render_state_clean(self.state);
             let mut frame = Frame {
-                rows,
+                rows: self.cached_rows.clone(),
                 cursor: (cursor.visible && cursor.viewport_has_value)
                     .then_some((cursor.viewport_x, cursor.viewport_y)),
                 bg: colors.background.into(),
@@ -571,7 +592,7 @@ impl Vt {
                     let Some(cell) = frame
                         .rows
                         .get_mut(row as usize)
-                        .and_then(|r| r.get_mut(col as usize))
+                        .and_then(|r| Arc::make_mut(r).get_mut(col as usize))
                     else {
                         continue;
                     };
@@ -713,13 +734,20 @@ impl Vt {
                     &mut len as *mut _ as *mut c_void,
                 );
                 if len > 0 {
-                    let mut cps = vec![0u32; len as usize];
+                    let mut inline = [0u32; 8];
+                    let mut overflow = Vec::new();
+                    let cps = if len as usize <= inline.len() {
+                        &mut inline[..len as usize]
+                    } else {
+                        overflow.resize(len as usize, 0);
+                        &mut overflow
+                    };
                     ghostty_render_state_row_cells_get(
                         c,
                         GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
                         cps.as_mut_ptr() as *mut c_void,
                     );
-                    text = cps.into_iter().filter_map(char::from_u32).collect();
+                    text = cps.iter().copied().filter_map(char::from_u32).collect();
                 }
             }
 
@@ -974,6 +1002,73 @@ mod tests {
         vt.resize(30, 8);
         assert_eq!(vt.frame().rows.len(), 8);
     }
+    #[test]
+    fn clean_rows_are_shared_and_old_frames_stay_unchanged() {
+        let mut vt = Vt::new(20, 4);
+        vt.write(b"first\r\nsecond");
+        let before = vt.frame();
+        let clean = vt.frame();
+        assert!(
+            before
+                .rows
+                .iter()
+                .zip(&clean.rows)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+        );
+        vt.write(b"\x1b[1;1HX");
+        let changed = vt.frame();
+        assert_eq!(before.rows[0][0].text, "f");
+        assert_eq!(changed.rows[0][0].text, "X");
+        assert!(Arc::ptr_eq(&before.rows[2], &changed.rows[2]));
+        vt.write(b"\x1b[4;1H\r\nlast");
+        let scrolled = vt.frame();
+        assert_eq!(scrolled.rows[0][0].text, "s");
+        assert_eq!(scrolled.rows[3][0].text, "l");
+        vt.resize(10, 2);
+        let resized = vt.frame();
+        assert_eq!(resized.rows.len(), 2);
+        assert!(resized.rows.iter().all(|r| r.len() == 10));
+    }
+
+    #[test]
+    fn retained_frames_match_full_extraction() {
+        let mut cached = Vt::new(12, 4);
+        let mut full = Vt::new(12, 4);
+        for bytes in [
+            "one\r\ntwo\r\nthree",
+            "\x1b[2;1H界e\u{301}",
+            "\x1b[2K",
+            "\x1b[4;1Hlast\r\nnext",
+            "\x1b[2;4r\x1b[4;1H\n",
+            "\x1b[r",
+            "\x1b]10;rgb:ff/00/00\x07",
+            "\x1b[?1049hALT",
+            "\x1b[?1049l",
+            "\x1b[2J",
+            "\x1b[?25l",
+            "\x1b[?25h",
+            "\x1bcreset",
+        ] {
+            cached.write(bytes.as_bytes());
+            full.write(bytes.as_bytes());
+            full.cached_colors = None;
+            let a = cached.frame();
+            let b = full.frame();
+            assert!(a.rows == b.rows, "{bytes:?}");
+            assert_eq!(a.cursor, b.cursor);
+            assert_eq!(a.bg, b.bg);
+        }
+    }
+
+    #[test]
+    fn deleted_image_restores_cached_text() {
+        let mut vt = Vt::new(20, 4);
+        vt.write(b"text\r\x1b_Ga=T,f=32,s=1,v=1,c=2,r=1;/wAA/w==\x1b\\");
+        assert_eq!(vt.frame().rows[0][0].text, "▀");
+        vt.write(b"\x1b_Ga=d,d=A;\x1b\\");
+        assert_eq!(vt.frame().rows[0][0].text, "t");
+    }
+
     #[test]
     fn input_follows_terminal_modes() {
         let mut vt = Vt::new(20, 4);

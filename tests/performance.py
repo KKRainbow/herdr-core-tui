@@ -33,7 +33,7 @@ for count in ([int(os.environ["TUI_PERF_PANES"])] if "TUI_PERF_PANES" in os.envi
     t=time.monotonic();core.rpc("terminal.list");latencies.append((time.monotonic()-t)*1000);time.sleep(.1)
    elapsed=time.monotonic()-start;stat=pathlib.Path(f"/proc/{process.pid}/stat").read_text().split();cpu=((int(stat[13])+int(stat[14])-ticks)/os.sysconf("SC_CLK_TCK"))/elapsed*100
    rss=int(pathlib.Path(f"/proc/{process.pid}/statm").read_text().split()[1])*os.sysconf("SC_PAGE_SIZE")/1048576
-   after=view("state")["metrics"];result={"mode":mode,"panes":count,"phase":phase,"seconds":round(elapsed,2),"cpu_percent":round(cpu,2),"rss_mib":round(rss,2),"renders":after["renders"]-before["renders"],"parsed_bytes":after["parsed_bytes"]-before["parsed_bytes"],"attached":after["attached"],"rpc_p95_ms":round(sorted(latencies)[int(len(latencies)*.95)],2)};results.append(result);print(json.dumps(result),flush=True)
+   after=view("state")["metrics"];result={"mode":mode,"panes":count,"phase":phase,"seconds":round(elapsed,2),"cpu_percent":round(cpu,2),"rss_mib":round(rss,2),"renders":after["renders"]-before["renders"],"parsed_bytes":after["parsed_bytes"]-before["parsed_bytes"],"attached":after["attached"],"rpc_p95_ms":round(sorted(latencies)[int(len(latencies)*.95)],2)};result.update({key:after[key]-before[key] for key in ("snapshot_builds","layout_builds") if key in after});results.append(result);print(json.dumps(result),flush=True)
    if phase=="hidden":
     assert result["parsed_bytes"]==0 and result["renders"]==0,result
   if not os.environ.get("TUI_PERF_VISIBLE_ONLY"):sample("idle")

@@ -28,3 +28,21 @@ Idle and hidden-output checks reported no redraws or parsed bytes.
 Run `TUI_PERF_VISIBLE_ONLY=1 TUI_PERF_SECONDS=8 TUI_PERF_MODE=repaint python3 tests/performance.py` for visible repaint measurements.
 Omit `TUI_PERF_VISIBLE_ONLY` to include idle and hidden-output checks.
 Set `TUI_TEST_BINARY` to compare saved release binaries and `TUI_PERF_OUTPUT` to save JSON.
+
+## 2. Invalidate layout and snapshots by event
+
+Terminal bytes now invalidate terminal presentation only, except when alternate-screen changes require layout updates.
+
+Compared with item1.
+Negative savings indicate a higher sample, which can include measurement noise.
+
+| Workload | Panes | Previous CPU % | Candidate CPU % | Relative saving |
+|---|---:|---:|---:|---:|
+| scroll | 1 | 11.49 | 11.85 | -3.1% |
+| scroll | 15 | 27.36 | 19.27 | 29.6% |
+| repaint | 1 | 7.17 | 6.18 | 13.8% |
+| repaint | 15 | 26.83 | 16.84 | 37.2% |
+
+Validation: formatting, Clippy, 62 unit tests, slow Git, pane exit, 400 streaming resizes, and two-viewer geometry passed.
+The pane-exit fixture now uses a controlled shell and waits for its prompt before EOF.
+Visible samples performed four or five snapshot/layout rebuilds across about 400 to 500 renders.

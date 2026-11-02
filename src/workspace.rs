@@ -111,6 +111,8 @@ pub struct Workspace {
     view_key: String,
     identities: BTreeMap<String, String>,
     renders: u64,
+    snapshot_builds: u64,
+    layout_builds: u64,
     parsed_bytes: u64,
     attention: herdr_client_lib::view::Attention,
     /// The attention last written to the state file, to save only changes.
@@ -378,6 +380,7 @@ impl Workspace {
         Ok(())
     }
     fn geometry(&mut self, area: Rect) {
+        self.layout_builds += 1;
         self.area = area;
         let view = self.view();
         let ui = &self.preferences.ui;
@@ -470,6 +473,7 @@ impl Workspace {
         }
     }
     fn refresh_snapshot(&mut self) {
+        self.snapshot_builds += 1;
         let doc = self.document();
         let view = self.view();
         let home = if self.machine.is_empty() {
@@ -921,6 +925,8 @@ pub async fn run(
         view_key: view_key.clone(),
         identities,
         renders: 0,
+        snapshot_builds: 0,
+        layout_builds: 0,
         parsed_bytes: 0,
         attention: {
             let mut attention = herdr_client_lib::view::Attention::default();
@@ -996,6 +1002,8 @@ pub async fn run(
     let mut interrupt = Box::pin(tokio::signal::ctrl_c());
     let mut dirty = true;
     let mut activate_layout = true;
+    let mut snapshot_due = false;
+    let mut layout_due = true;
     let mut render_due = true;
     let mut redraw = tokio::time::interval(Duration::from_millis(16));
     redraw.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1005,22 +1013,29 @@ pub async fn run(
     let mut notify = tokio::time::interval(Duration::from_millis(100));
     notify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        if connected {
+        if snapshot_due {
             app.refresh_snapshot();
-            dirty |= app.refresh_git();
+            if connected {
+                dirty |= app.refresh_git();
+            }
+            snapshot_due = false;
         }
         if dirty && render_due {
             let area = screen.size()?;
-            app.geometry(Rect::new(0, 0, area.width, area.height));
-            if connected && let Err(e) = app.sync_surfaces(activate_layout).await {
-                app.toast(e.to_string(), true);
+            let area = Rect::new(0, 0, area.width, area.height);
+            if layout_due || activate_layout || area != app.area {
+                app.geometry(area);
+                if connected && let Err(e) = app.sync_surfaces(activate_layout).await {
+                    app.toast(e.to_string(), true);
+                }
             }
             activate_layout = false;
-            app.refresh_snapshot();
+            layout_due = false;
             // The host can resize while streams resize; redraw at the size the frame used.
             let resized = app.draw(&mut screen)?;
             dirty = resized;
             activate_layout |= resized;
+            layout_due |= resized;
             render_due = false;
         }
         enum Next {
@@ -1044,10 +1059,20 @@ pub async fn run(
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
         _=redraw.tick(),if dirty=>Next::Paint,
         };
+        match &next {
+            Next::Host(_) | Next::Update(_) | Next::Retry => {
+                snapshot_due = true;
+                layout_due = true;
+            }
+            Next::Control(request) if request.command != "state" => {
+                snapshot_due = true;
+                layout_due = true;
+            }
+            Next::Git(_) => snapshot_due = true,
+            _ => {}
+        }
         match next {
             Next::Git(update) => {
-                app.refresh_snapshot();
-                dirty |= app.refresh_git();
                 if app.document().is_none() {
                     app.invalidate_git();
                 }
@@ -1058,7 +1083,7 @@ pub async fn run(
                 let quit = request.command == "quit";
                 let result = if request.command == "state" {
                     Ok(
-                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.document().is_some(),"metrics":{"renders":app.renders,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
+                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.document().is_some(),"metrics":{"renders":app.renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
                     )
                 } else if quit {
                     Ok(json!({"ok":true}))

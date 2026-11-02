@@ -13,7 +13,7 @@ import time
 from fixture import Core
 
 binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
-core = Core("pane-exit")
+core = Core("pane-exit", {"SHELL": "/bin/sh", "PS1": "EOF_READY> "})
 process = master = slave = None
 output = bytearray()
 try:
@@ -42,6 +42,9 @@ try:
     def placed(terminal):
         return f'"terminal": "{terminal["address"]}"' in json.dumps(document())
 
+    def ready(terminal):
+        until(lambda: core.rpc("terminal.read", {"terminal": terminal["address"]})["text"].rstrip().endswith("EOF_READY>"), "shell prompt ready", timeout=10)
+
     source = command("space.new", {"folder": str(core.root), "argv": ["sh", "-i"]})
     root = source["terminal"]
     split = command("pane.split", {"id": source["pane"], "argv": ["sh", "-i"]})
@@ -52,6 +55,7 @@ try:
     until(lambda: b"agents" in output, "workspace rendered", timeout=10)
     until(lambda: state()["metrics"]["attached"] == 2, "both shells attached", timeout=10)
     subprocess.run([str(binary), "--instance", "pane-exit", "view", "pane.focus", json.dumps({"id": split["pane"]})], env=core.env, capture_output=True, check=True, timeout=5)
+    ready(split["terminal"])
     started = time.monotonic()
     os.write(master, b"\x04")
     until(lambda: core.rpc("terminal.get", {"terminal": split["terminal"]["address"]})["state"] == "finished", "Ctrl+D reached the shell")
@@ -65,6 +69,7 @@ try:
     another = command("pane.split", {"id": source["pane"], "argv": ["sh", "-i"]})
     until(lambda: state()["metrics"]["attached"] == 3, "busy split and shell attached")
     subprocess.run([str(binary), "--instance", "pane-exit", "view", "pane.focus", json.dumps({"id": another["pane"]})], env=core.env, capture_output=True, check=True, timeout=5)
+    ready(another["terminal"])
     os.write(master, b"\x04")
     until(lambda: not placed(another["terminal"]), "output from a neighbor delayed EOF closure")
     core.rpc("terminal.kill", {"terminal": busy["terminal"]["address"]})
@@ -85,6 +90,7 @@ try:
     until(lambda: state()["metrics"]["attached"] == 1, "recovered pane attached", timeout=10)
     assert placed(root), "a lost stream must not close its pane"
 
+    ready(root)
     os.write(master, b"\x04")
     until(lambda: document()["spaces"] == [], "final shell left an empty workspace")
     until(lambda: state()["panes"] == [], "final pane still visible")
@@ -93,6 +99,7 @@ try:
     assert termios.tcgetattr(slave) == original
 
     stale = command("space.new", {"folder": str(core.root), "argv": ["sh", "-i"]})
+    ready(stale["terminal"])
     core.rpc("terminal.keys", {"terminal": stale["terminal"]["address"], "keys": ["ctrl+d"]})
     until(lambda: core.rpc("terminal.get", {"terminal": stale["terminal"]["address"]})["state"] == "finished", "detached shell exited")
     assert placed(stale["terminal"])

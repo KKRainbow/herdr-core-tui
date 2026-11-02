@@ -46,3 +46,13 @@ Negative savings indicate a higher sample, which can include measurement noise.
 Validation: formatting, Clippy, 62 unit tests, slow Git, pane exit, 400 streaming resizes, and two-viewer geometry passed.
 The pane-exit fixture now uses a controlled shell and waits for its prompt before EOF.
 Visible samples performed four or five snapshot/layout rebuilds across about 400 to 500 renders.
+
+## 3. Borrow documents for reads
+
+Add `Session::document_ref` and use it for TUI projection, layout, availability checks, and library read-only commands.
+Keep `Session::document` as an owned copy for edits and existing consumers.
+Validation: both repositories passed formatting, Clippy, and all enabled unit tests.
+The library's isolated core integration suite also passed, including document conflicts and worktree operations.
+The new test checks shared storage, unavailable documents, private edits, and unknown-field preservation.
+CPU samples were inconclusive because unrelated host compilation raised load near 29 and changed redraw rates and RPC latency.
+No incremental CPU saving is claimed for this step.

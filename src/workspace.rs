@@ -302,7 +302,7 @@ impl Workspace {
         let loaded: HashSet<&String> = self
             .identities
             .iter()
-            .filter(|(machine, _)| self.session.document(machine).is_ok())
+            .filter(|(machine, _)| self.session.document_ref(machine).is_ok())
             .map(|(_, core)| core)
             .collect();
         let terminals = &self.session.terminals;
@@ -349,7 +349,7 @@ impl Workspace {
     }
     fn focus_agent(&mut self, address: &str) {
         let placed = self.session.documents.keys().find_map(|machine| {
-            let doc = self.session.document(machine).ok()?;
+            let doc = self.session.document_ref(machine).ok()?;
             agent_pane(doc.value(), address, machine).map(|id| (machine.clone(), id))
         });
         if let Some((machine, pane)) = placed {
@@ -361,8 +361,8 @@ impl Workspace {
     }
     /// Focuses a space or tab at the pane its viewer last used there.
     fn focus_container(&mut self, id: &str) {
-        if let Some(doc) = self.document()
-            && let Some(pane) = self.view().remembered(&doc, id)
+        if let Ok(doc) = self.session.document_ref(&self.machine)
+            && let Some(pane) = self.view().remembered(doc, id)
         {
             self.focus(&pane);
         }
@@ -425,7 +425,7 @@ impl Workspace {
                 borders: ratatui::widgets::Borders::NONE,
                 scrollbar: None,
             });
-        } else if let Some(doc) = self.document()
+        } else if let Ok(doc) = self.session.document_ref(&self.machine)
             && let Some(root) = view
                 .active_tab
                 .as_deref()
@@ -474,7 +474,7 @@ impl Workspace {
     }
     fn refresh_snapshot(&mut self) {
         self.snapshot_builds += 1;
-        let doc = self.document();
+        let doc = self.session.document_ref(&self.machine).ok();
         let view = self.view();
         let home = if self.machine.is_empty() {
             std::env::var("HOME").unwrap_or_default()
@@ -494,7 +494,7 @@ impl Workspace {
     }
     /// Asks git about each space's folder on its machine, at most every few seconds per folder.
     fn refresh_git(&mut self) -> bool {
-        if self.document().is_none() {
+        if self.session.document_ref(&self.machine).is_err() {
             return false;
         }
         let folders: HashSet<String> = self
@@ -650,12 +650,12 @@ impl Workspace {
     async fn command(&mut self, command: &str, args: Value) -> Result<Value> {
         if matches!(command, "pane.focus" | "tab.focus" | "space.focus") {
             let id = args["id"].as_str().ok_or("id is required")?;
-            let doc = self.document().ok_or("Document unavailable")?;
+            let doc = self.session.document_ref(&self.machine)?;
             doc.node(id).ok_or("Target unavailable")?;
             let pane = if command == "pane.focus" {
                 Some(id.to_owned())
             } else {
-                self.view().remembered(&doc, id)
+                self.view().remembered(doc, id)
             }
             .ok_or("Target has no pane")?;
             self.focus(&pane);
@@ -1073,7 +1073,7 @@ pub async fn run(
         }
         match next {
             Next::Git(update) => {
-                if app.document().is_none() {
+                if app.session.document_ref(&app.machine).is_err() {
                     app.invalidate_git();
                 }
                 dirty |= app.git_poller.apply(update, &mut app.git);
@@ -1083,7 +1083,7 @@ pub async fn run(
                 let quit = request.command == "quit";
                 let result = if request.command == "state" {
                     Ok(
-                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.document().is_some(),"metrics":{"renders":app.renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
+                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.session.document_ref(&app.machine).is_ok(),"metrics":{"renders":app.renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
                     )
                 } else if quit {
                     Ok(json!({"ok":true}))

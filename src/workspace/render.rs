@@ -180,7 +180,7 @@ impl Workspace {
         shell::panes::render_borders(frame.buffer_mut(), &frames, &palette);
         if self.panes.is_empty() {
             let surface = self.layout.pane_surface;
-            let message = if self.document().is_none() {
+            let message = if self.session.document_ref(&self.machine).is_err() {
                 format!(
                     "{}: unavailable. Select a connected machine.",
                     if self.machine.is_empty() {

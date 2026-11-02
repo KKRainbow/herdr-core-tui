@@ -622,6 +622,16 @@ impl Workspace {
             .map(|a| format!("@{a}"))
             .or(self.view().focused)
     }
+    fn active_terminal(&self) -> Option<String> {
+        if let Some(address) = &self.peek {
+            return Some(address.clone());
+        }
+        let view = self.view();
+        let document = self.session.document_ref(&self.machine).ok()?;
+        let pane = document.node(view.focused.as_deref()?)?;
+        let terminal = pane["content"]["terminal"].as_str()?;
+        Some(qualify(terminal, &self.machine))
+    }
     /// Runs a shared or private command and reports failures as a toast.
     /// Herdr opens a workspace where it starts when the session has none. A
     /// never-written document is a new session; one emptied by closing stays empty.
@@ -647,7 +657,7 @@ impl Workspace {
             }
         }
     }
-    async fn command(&mut self, command: &str, args: Value) -> Result<Value> {
+    async fn command(&mut self, command: &str, mut args: Value) -> Result<Value> {
         if matches!(command, "pane.focus" | "tab.focus" | "space.focus") {
             let id = args["id"].as_str().ok_or("id is required")?;
             let doc = self.session.document_ref(&self.machine)?;
@@ -685,6 +695,16 @@ impl Workspace {
             return Ok(json!({"ok":true}));
         }
         self.check_pane_action(command)?;
+        if command == "space.new"
+            && args["folder"].is_null()
+            && let Some(address) = self.active_terminal()
+            && address.split_once('/').map_or("", |(machine, _)| machine) == self.machine
+        {
+            let terminal = self.session.client.terminal_get(&address, TIME).await?;
+            if let Some(folder) = terminal.folder() {
+                args["folder"] = json!(folder);
+            }
+        }
         let mut view = self.view();
         let result =
             actions::execute(&mut self.session, &self.machine, &mut view, command, args).await?;

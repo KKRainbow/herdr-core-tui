@@ -23,6 +23,7 @@ integration: build
     python3 tests/worktree_remove.py
     python3 tests/attention.py
     python3 tests/startup.py
+    python3 tests/new_directory.py
     python3 tests/keys.py
     python3 tests/settings.py
     python3 tests/herdr_config.py

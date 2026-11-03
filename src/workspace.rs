@@ -124,6 +124,10 @@ pub struct Workspace {
     retained_renders: u64,
     /// What the host shows now; each frame sends only what differs from it.
     presented: ratatui::buffer::Buffer,
+    /// The host cursor after the last frame.
+    presented_cursor: Option<(u16, u16)>,
+    /// When the person last typed into a terminal: its echo draws at once.
+    typed_at: Option<Instant>,
     snapshot_builds: u64,
     layout_builds: u64,
     parsed_bytes: u64,
@@ -996,6 +1000,8 @@ pub async fn run(
         renders: 0,
         retained_renders: 0,
         presented: Default::default(),
+        presented_cursor: None,
+        typed_at: None,
         snapshot_builds: 0,
         layout_builds: 0,
         parsed_bytes: 0,
@@ -1080,6 +1086,9 @@ pub async fn run(
     let mut render_due = true;
     let mut redraw = tokio::time::interval(Duration::from_millis(16));
     redraw.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // herdr-app draws output on a shared ~30 Hz clock so panes printing out of step share frames.
+    let mut output_clock = tokio::time::interval(Duration::from_millis(33));
+    output_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut connected = true;
     let mut retry = tokio::time::interval(Duration::from_secs(2));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1116,6 +1125,9 @@ pub async fn run(
             }
         }
         let repaint = app.repaint_pending();
+        let typing = app
+            .typed_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(200));
         enum Next {
             Host(Option<io::Result<Event>>),
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
@@ -1135,7 +1147,8 @@ pub async fn run(
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
-        _=redraw.tick(),if dirty||output_due=>Next::Paint,
+        _=redraw.tick(),if dirty||output_due&&typing=>Next::Paint,
+        _=output_clock.tick(),if output_due&&!typing=>Next::Paint,
         _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
@@ -1216,6 +1229,7 @@ pub async fn run(
                     events = EventStream::new();
                     screen.clear()?;
                     app.presented = Default::default();
+                    app.presented_cursor = None;
                     if let Err(error) = edited {
                         app.toast(error.to_string(), true);
                     }

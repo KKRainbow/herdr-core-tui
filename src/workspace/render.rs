@@ -32,6 +32,7 @@ impl Workspace {
         let updates = self.presented.diff(&next);
         present(screen, updates.into_iter(), cursor)?;
         self.presented = next;
+        self.presented_cursor = cursor;
         self.update_window_title()?;
         Ok(resized)
     }
@@ -67,8 +68,6 @@ impl Workspace {
             }
             frames.push((index, frame));
         }
-        self.renders += 1;
-        self.retained_renders += 1;
         let palette = self.config.palette.clone();
         let focused_id = self.active_id();
         let mut updates = Vec::new();
@@ -105,11 +104,18 @@ impl Workspace {
             }
             surface.painted = frame.rows;
         }
+        // Output that changed nothing on screen (a parked cursor, a mode) needs no frame.
+        if updates.is_empty() && cursor == self.presented_cursor {
+            return Ok(true);
+        }
+        self.renders += 1;
+        self.retained_renders += 1;
         present(
             screen,
             updates.iter().map(|(x, y, cell)| (*x, *y, cell)),
             cursor,
         )?;
+        self.presented_cursor = cursor;
         Ok(true)
     }
 

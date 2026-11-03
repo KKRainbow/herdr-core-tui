@@ -50,6 +50,12 @@ struct Surface {
     wanted: (u16, u16),
     error: Option<String>,
 }
+/// A terminal pane to keep attached; `shown` is the size it shows at, or None while hidden.
+struct SurfaceTarget {
+    pane: String,
+    address: String,
+    shown: Option<(u16, u16)>,
+}
 struct Click {
     at: Instant,
     pane: String,
@@ -510,49 +516,73 @@ impl Workspace {
     fn invalidate_git(&mut self) {
         self.git_poller.invalidate();
     }
-    async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
-        let visible: Vec<_> = self
+    /// Every terminal pane on this machine, visible ones first with the size they show at.
+    /// Hidden panes stay attached and keep parsing, as Herdr keeps every pane live,
+    /// so showing one again needs no repaint and core keeps its size.
+    fn surface_targets(&self) -> Vec<SurfaceTarget> {
+        let mut targets: Vec<_> = self
             .panes
             .iter()
-            .filter(|p| p.terminal.is_some())
-            .map(|p| p.id.clone())
+            .filter(|pane| !pane.content.is_empty())
+            .filter_map(|pane| {
+                let local = pane.terminal.as_ref()?;
+                let address = if pane.id.starts_with('@') {
+                    local.clone()
+                } else {
+                    qualify(local, &self.machine)
+                };
+                let wanted = (pane.content.width.max(1), pane.content.height.max(1));
+                Some(SurfaceTarget {
+                    pane: pane.id.clone(),
+                    address,
+                    shown: Some(wanted),
+                })
+            })
             .collect();
-        for (id, surface) in &mut self.surfaces {
-            if !visible.contains(id) {
-                surface.stream = None;
-                surface.retry_at = Instant::now();
-            }
+        if let Ok(document) = self.session.document_ref(&self.machine) {
+            let hidden: Vec<_> = model::places(document, &self.machine)
+                .into_iter()
+                .filter(|(_, place)| !self.panes.iter().any(|pane| pane.id == place.pane))
+                .map(|(address, place)| SurfaceTarget {
+                    pane: place.pane,
+                    address,
+                    shown: None,
+                })
+                .collect();
+            targets.extend(hidden);
         }
-        if self.surfaces.len() > 32 {
-            self.surfaces.retain(|id, _| visible.contains(id));
-        }
-        for pane in &self.panes {
-            let Some(local) = &pane.terminal else {
-                continue;
-            };
-            let area = pane.content;
-            if area.is_empty() {
-                continue;
-            }
-            let address = if pane.id.starts_with('@') {
-                local.clone()
-            } else {
-                qualify(local, &self.machine)
-            };
-            let wanted = (area.width.max(1), area.height.max(1));
-            let surface = self
-                .surfaces
-                .entry(pane.id.clone())
-                .or_insert_with(|| Surface {
-                    ended: false,
-                    retry_at: Instant::now(),
-                    address: address.clone(),
-                    stream: None,
-                    vt: Vt::new(wanted.0, wanted.1),
-                    copy: None,
-                    wanted,
-                    error: None,
-                });
+        targets
+    }
+    async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
+        let targets = self.surface_targets();
+        self.surfaces
+            .retain(|id, _| targets.iter().any(|target| &target.pane == id));
+        for SurfaceTarget {
+            pane: id,
+            address,
+            shown,
+        } in targets
+        {
+            let wanted = shown
+                .or_else(|| self.surfaces.get(&id).map(|surface| surface.wanted))
+                .or_else(|| {
+                    self.session
+                        .terminals
+                        .values()
+                        .find(|record| record.address == address)
+                        .map(|record| crate::connection::size(record, (80, 24)))
+                })
+                .unwrap_or((80, 24));
+            let surface = self.surfaces.entry(id).or_insert_with(|| Surface {
+                ended: false,
+                retry_at: Instant::now(),
+                address: address.clone(),
+                stream: None,
+                vt: Vt::new(wanted.0, wanted.1),
+                copy: None,
+                wanted,
+                error: None,
+            });
             if surface.address != address {
                 surface.address = address.clone();
                 surface.ended = false;
@@ -605,7 +635,7 @@ impl Workspace {
                     }
                 }
             }
-            if surface.wanted != wanted || activate {
+            if shown.is_some() && (surface.wanted != wanted || activate) {
                 surface.wanted = wanted;
                 if self.focused
                     && let Some(stream) = &surface.stream
@@ -1170,11 +1200,12 @@ pub async fn run(
                 dirty = true;
             }
             Next::Output(id, Ok(Some(StreamEvent::Data(bytes)))) => {
+                let shown = app.panes.iter().any(|pane| pane.id == id);
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     app.parsed_bytes += bytes.len() as u64;
                     let alternate = surface.vt.alt_screen();
                     surface.vt.write(&bytes);
-                    activate_layout |= alternate != surface.vt.alt_screen();
+                    activate_layout |= shown && alternate != surface.vt.alt_screen();
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
                     {
@@ -1182,7 +1213,8 @@ pub async fn run(
                         surface.stream = None;
                     }
                 }
-                dirty = true;
+                // Hidden panes parse to stay current but draw nothing until shown.
+                dirty |= shown;
             }
             Next::Output(id, outcome) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {

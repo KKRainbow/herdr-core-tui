@@ -13,6 +13,11 @@ impl Workspace {
         self.renders += 1;
         self.hits = Hits::default();
         let mut resized = false;
+        // As Herdr does, the host shows each frame whole instead of as it is written.
+        crossterm::queue!(
+            screen.backend_mut(),
+            crossterm::terminal::BeginSynchronizedUpdate
+        )?;
         screen.draw(|frame| {
             if frame.area() != self.area {
                 self.geometry(frame.area());
@@ -20,6 +25,10 @@ impl Workspace {
             }
             self.render_frame(frame)
         })?;
+        crossterm::execute!(
+            screen.backend_mut(),
+            crossterm::terminal::EndSynchronizedUpdate
+        )?;
         self.update_window_title()?;
         Ok(resized)
     }

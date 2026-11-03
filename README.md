@@ -138,7 +138,7 @@ Ghostty handles colors, Unicode, alternate screens, keyboard modes, mouse report
 Kitty graphics use clipped half-block rendering, including decoded PNG images.
 Virtual image placements and pixel-perfect graphics are not supported.
 Scrollback is bounded to 10,000 lines and 10 MB per cached terminal; image storage is bounded to 16 MB.
-The workspace keeps at most 32 hidden terminal caches and detaches hidden streams.
+Hidden panes on the current machine stay attached and parse output without drawing, as in Herdr, so showing one again needs no repaint.
 Linux is the supported platform for this release.
 Native macOS is unvalidated; Windows also needs a native local control transport.
 

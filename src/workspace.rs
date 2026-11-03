@@ -47,6 +47,8 @@ struct Surface {
     stream: Option<Stream>,
     repaint: crate::connection::Repaint,
     vt: Vt,
+    /// The rows last put on the host, to send only rows that changed since.
+    painted: Vec<std::sync::Arc<Vec<crate::vt::Cell>>>,
     copy: Option<Copy>,
     wanted: (u16, u16),
     error: Option<String>,
@@ -118,6 +120,10 @@ pub struct Workspace {
     view_key: String,
     identities: BTreeMap<String, String>,
     renders: u64,
+    /// Frames that sent only changed terminal rows.
+    retained_renders: u64,
+    /// What the host shows now; each frame sends only what differs from it.
+    presented: ratatui::buffer::Buffer,
     snapshot_builds: u64,
     layout_builds: u64,
     parsed_bytes: u64,
@@ -581,6 +587,7 @@ impl Workspace {
                 stream: None,
                 repaint: Default::default(),
                 vt: Vt::new(wanted.0, wanted.1),
+                painted: Vec::new(),
                 copy: None,
                 wanted,
                 error: None,
@@ -987,6 +994,8 @@ pub async fn run(
         view_key: view_key.clone(),
         identities,
         renders: 0,
+        retained_renders: 0,
+        presented: Default::default(),
         snapshot_builds: 0,
         layout_builds: 0,
         parsed_bytes: 0,
@@ -1063,6 +1072,8 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut interrupt = Box::pin(tokio::signal::ctrl_c());
     let mut dirty = true;
+    // Only visible terminals printed since the last frame.
+    let mut output_due = false;
     let mut activate_layout = true;
     let mut snapshot_due = false;
     let mut layout_due = true;
@@ -1082,7 +1093,7 @@ pub async fn run(
             }
             snapshot_due = false;
         }
-        if dirty && render_due {
+        if (dirty || output_due) && render_due {
             let area = screen.size()?;
             let area = Rect::new(0, 0, area.width, area.height);
             if layout_due || activate_layout || area != app.area {
@@ -1094,11 +1105,13 @@ pub async fn run(
             activate_layout = false;
             layout_due = false;
             if app.repaint_pending().is_none() {
-                // The host can resize while streams resize; redraw at the size the frame used.
-                let resized = app.draw(&mut screen)?;
-                dirty = resized;
-                activate_layout |= resized;
-                layout_due |= resized;
+                if dirty || !app.draw_output(&mut screen)? {
+                    let resized = app.draw(&mut screen)?;
+                    dirty = resized;
+                    activate_layout |= resized;
+                    layout_due |= resized;
+                }
+                output_due = false;
                 render_due = false;
             }
         }
@@ -1122,7 +1135,7 @@ pub async fn run(
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
-        _=redraw.tick(),if dirty=>Next::Paint,
+        _=redraw.tick(),if dirty||output_due=>Next::Paint,
         _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
@@ -1150,7 +1163,7 @@ pub async fn run(
                 let quit = request.command == "quit";
                 let result = if request.command == "state" {
                     Ok(
-                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.session.document_ref(&app.machine).is_ok(),"metrics":{"renders":app.renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
+                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.session.document_ref(&app.machine).is_ok(),"metrics":{"renders":app.renders,"retained_renders":app.retained_renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
                     )
                 } else if quit {
                     Ok(json!({"ok":true}))
@@ -1202,6 +1215,7 @@ pub async fn run(
                     let edited = Host::suspend(|| crate::scrollback::edit(&text))?;
                     events = EventStream::new();
                     screen.clear()?;
+                    app.presented = Default::default();
                     if let Err(error) = edited {
                         app.toast(error.to_string(), true);
                     }
@@ -1225,7 +1239,9 @@ pub async fn run(
                     let alternate = surface.vt.alt_screen();
                     surface.vt.write(&bytes);
                     surface.repaint.received(bytes.len());
-                    activate_layout |= shown && alternate != surface.vt.alt_screen();
+                    let switched = shown && alternate != surface.vt.alt_screen();
+                    activate_layout |= switched;
+                    dirty |= switched;
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
                     {
@@ -1234,7 +1250,7 @@ pub async fn run(
                     }
                 }
                 // Hidden panes parse to stay current but draw nothing until shown.
-                dirty |= shown;
+                output_due |= shown;
             }
             Next::Output(id, outcome) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {

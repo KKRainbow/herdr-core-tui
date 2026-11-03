@@ -33,6 +33,10 @@ pub(super) struct Notifications {
 }
 
 impl Notifications {
+    /// A card covers part of the pane surface.
+    pub(super) fn card_shown(&self) -> bool {
+        self.visible.is_some()
+    }
     pub(super) fn active(&self) -> bool {
         self.visible.is_some() || !self.pending.is_empty()
     }

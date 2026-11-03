@@ -45,10 +45,19 @@ struct Surface {
     retry_at: Instant,
     address: String,
     stream: Option<Stream>,
+    repaint: crate::connection::Repaint,
     vt: Vt,
+    /// The rows last put on the host, to send only rows that changed since.
+    painted: Vec<std::sync::Arc<Vec<crate::vt::Cell>>>,
     copy: Option<Copy>,
     wanted: (u16, u16),
     error: Option<String>,
+}
+/// A terminal pane to keep attached; `shown` is the size it shows at, or None while hidden.
+struct SurfaceTarget {
+    pane: String,
+    address: String,
+    shown: Option<(u16, u16)>,
 }
 struct Click {
     at: Instant,
@@ -111,6 +120,14 @@ pub struct Workspace {
     view_key: String,
     identities: BTreeMap<String, String>,
     renders: u64,
+    /// Frames that sent only changed terminal rows.
+    retained_renders: u64,
+    /// What the host shows now; each frame sends only what differs from it.
+    presented: ratatui::buffer::Buffer,
+    /// The host cursor after the last frame.
+    presented_cursor: Option<(u16, u16)>,
+    /// When the person last typed into a terminal: its echo draws at once.
+    typed_at: Option<Instant>,
     snapshot_builds: u64,
     layout_builds: u64,
     parsed_bytes: u64,
@@ -312,9 +329,10 @@ impl Workspace {
         for (identity, address, alert) in alerts {
             self.notify(identity, &address, alert, now);
         }
-        if let Some(doc) = self.document() {
-            let view = self.view_mut();
-            view.reconcile(&doc);
+        let id = self.view_id();
+        if let Ok(doc) = self.session.document_ref(&self.machine) {
+            let view = self.views.entry(id).or_default();
+            view.reconcile(doc);
             if view.focused.is_none()
                 && let Some(pane) = doc.value()["spaces"].as_array().and_then(|s| {
                     s.iter().find_map(|s| {
@@ -324,7 +342,7 @@ impl Workspace {
                     })
                 })
             {
-                view.focus(&doc, pane);
+                view.focus(doc, pane);
             }
         }
     }
@@ -510,49 +528,75 @@ impl Workspace {
     fn invalidate_git(&mut self) {
         self.git_poller.invalidate();
     }
-    async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
-        let visible: Vec<_> = self
+    /// Every terminal pane on this machine, visible ones first with the size they show at.
+    /// Hidden panes stay attached and keep parsing, as Herdr keeps every pane live,
+    /// so showing one again needs no repaint and core keeps its size.
+    fn surface_targets(&self) -> Vec<SurfaceTarget> {
+        let mut targets: Vec<_> = self
             .panes
             .iter()
-            .filter(|p| p.terminal.is_some())
-            .map(|p| p.id.clone())
+            .filter(|pane| !pane.content.is_empty())
+            .filter_map(|pane| {
+                let local = pane.terminal.as_ref()?;
+                let address = if pane.id.starts_with('@') {
+                    local.clone()
+                } else {
+                    qualify(local, &self.machine)
+                };
+                let wanted = (pane.content.width.max(1), pane.content.height.max(1));
+                Some(SurfaceTarget {
+                    pane: pane.id.clone(),
+                    address,
+                    shown: Some(wanted),
+                })
+            })
             .collect();
-        for (id, surface) in &mut self.surfaces {
-            if !visible.contains(id) {
-                surface.stream = None;
-                surface.retry_at = Instant::now();
-            }
+        if let Ok(document) = self.session.document_ref(&self.machine) {
+            let hidden: Vec<_> = model::places(document, &self.machine)
+                .into_iter()
+                .filter(|(_, place)| !self.panes.iter().any(|pane| pane.id == place.pane))
+                .map(|(address, place)| SurfaceTarget {
+                    pane: place.pane,
+                    address,
+                    shown: None,
+                })
+                .collect();
+            targets.extend(hidden);
         }
-        if self.surfaces.len() > 32 {
-            self.surfaces.retain(|id, _| visible.contains(id));
-        }
-        for pane in &self.panes {
-            let Some(local) = &pane.terminal else {
-                continue;
-            };
-            let area = pane.content;
-            if area.is_empty() {
-                continue;
-            }
-            let address = if pane.id.starts_with('@') {
-                local.clone()
-            } else {
-                qualify(local, &self.machine)
-            };
-            let wanted = (area.width.max(1), area.height.max(1));
-            let surface = self
-                .surfaces
-                .entry(pane.id.clone())
-                .or_insert_with(|| Surface {
-                    ended: false,
-                    retry_at: Instant::now(),
-                    address: address.clone(),
-                    stream: None,
-                    vt: Vt::new(wanted.0, wanted.1),
-                    copy: None,
-                    wanted,
-                    error: None,
-                });
+        targets
+    }
+    async fn sync_surfaces(&mut self, activate: bool) -> Result<()> {
+        let targets = self.surface_targets();
+        self.surfaces
+            .retain(|id, _| targets.iter().any(|target| &target.pane == id));
+        for SurfaceTarget {
+            pane: id,
+            address,
+            shown,
+        } in targets
+        {
+            let wanted = shown
+                .or_else(|| self.surfaces.get(&id).map(|surface| surface.wanted))
+                .or_else(|| {
+                    self.session
+                        .terminals
+                        .values()
+                        .find(|record| record.address == address)
+                        .map(|record| crate::connection::size(record, (80, 24)))
+                })
+                .unwrap_or((80, 24));
+            let surface = self.surfaces.entry(id).or_insert_with(|| Surface {
+                ended: false,
+                retry_at: Instant::now(),
+                address: address.clone(),
+                stream: None,
+                repaint: Default::default(),
+                vt: Vt::new(wanted.0, wanted.1),
+                painted: Vec::new(),
+                copy: None,
+                wanted,
+                error: None,
+            });
             if surface.address != address {
                 surface.address = address.clone();
                 surface.ended = false;
@@ -596,6 +640,7 @@ impl Workspace {
                         let size = crate::connection::size(&record, wanted);
                         surface.vt = Vt::new(size.0, size.1);
                         surface.stream = Some(stream);
+                        surface.repaint.start();
                         surface.error = None;
                         surface.wanted = wanted;
                     }
@@ -605,7 +650,7 @@ impl Workspace {
                     }
                 }
             }
-            if surface.wanted != wanted || activate {
+            if shown.is_some() && (surface.wanted != wanted || activate) {
                 surface.wanted = wanted;
                 if self.focused
                     && let Some(stream) = &surface.stream
@@ -615,6 +660,13 @@ impl Workspace {
             }
         }
         Ok(())
+    }
+    /// When drawing stops waiting for visible panes' attach repaints, while one is arriving.
+    fn repaint_pending(&self) -> Option<Instant> {
+        self.panes
+            .iter()
+            .filter_map(|pane| self.surfaces.get(&pane.id)?.repaint.pending_until())
+            .min()
     }
     fn active_id(&self) -> Option<String> {
         self.peek
@@ -901,6 +953,17 @@ fn machine_names(machines: &MachineList) -> Vec<String> {
     names.extend(machines.machines.iter().map(|m| m.name.clone()));
     names
 }
+/// Only these can leave a finished terminal placed; the retry tick catches anything else.
+fn can_finish_pane(notification: &Notification) -> bool {
+    match notification {
+        Notification::Event(event) => matches!(event.kind.as_str(), "finished" | "doc"),
+        _ => true,
+    }
+}
+/// A terminal title change: no pane, sidebar, or layout shows the terminal title.
+fn title_only(notification: &Notification) -> bool {
+    matches!(notification, Notification::Event(event) if event.kind == "title")
+}
 async fn next_output(
     surfaces: &mut BTreeMap<String, Surface>,
 ) -> (String, std::result::Result<Option<StreamEvent>, Error>) {
@@ -943,6 +1006,10 @@ pub async fn run(
         view_key: view_key.clone(),
         identities,
         renders: 0,
+        retained_renders: 0,
+        presented: Default::default(),
+        presented_cursor: None,
+        typed_at: None,
         snapshot_builds: 0,
         layout_builds: 0,
         parsed_bytes: 0,
@@ -1019,12 +1086,19 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut interrupt = Box::pin(tokio::signal::ctrl_c());
     let mut dirty = true;
+    // Only visible terminals printed since the last frame.
+    let mut output_due = false;
+    // Core events changed what the frame shows; they share the output clock.
+    let mut event_due = false;
     let mut activate_layout = true;
     let mut snapshot_due = false;
     let mut layout_due = true;
     let mut render_due = true;
     let mut redraw = tokio::time::interval(Duration::from_millis(16));
     redraw.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // herdr-app draws output on a shared ~30 Hz clock so panes printing out of step share frames.
+    let mut output_clock = tokio::time::interval(Duration::from_millis(33));
+    output_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut connected = true;
     let mut retry = tokio::time::interval(Duration::from_secs(2));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1038,7 +1112,7 @@ pub async fn run(
             }
             snapshot_due = false;
         }
-        if dirty && render_due {
+        if (dirty || output_due || event_due) && render_due {
             let area = screen.size()?;
             let area = Rect::new(0, 0, area.width, area.height);
             if layout_due || activate_layout || area != app.area {
@@ -1049,13 +1123,22 @@ pub async fn run(
             }
             activate_layout = false;
             layout_due = false;
-            // The host can resize while streams resize; redraw at the size the frame used.
-            let resized = app.draw(&mut screen)?;
-            dirty = resized;
-            activate_layout |= resized;
-            layout_due |= resized;
-            render_due = false;
+            if app.repaint_pending().is_none() {
+                if dirty || event_due || !app.draw_output(&mut screen)? {
+                    let resized = app.draw(&mut screen)?;
+                    dirty = resized;
+                    activate_layout |= resized;
+                    layout_due |= resized;
+                }
+                output_due = false;
+                event_due = false;
+                render_due = false;
+            }
         }
+        let repaint = app.repaint_pending();
+        let typing = app
+            .typed_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(200));
         enum Next {
             Host(Option<io::Result<Event>>),
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
@@ -1075,9 +1158,12 @@ pub async fn run(
         update=app.session.next(),if connected=>Next::Update(update),
         _=retry.tick()=>Next::Retry,
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
-        _=redraw.tick(),if dirty=>Next::Paint,
+        _=redraw.tick(),if dirty||output_due&&typing=>Next::Paint,
+        _=output_clock.tick(),if output_due&&!typing||event_due=>Next::Paint,
+        _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
+            Next::Update(Ok(notification)) if title_only(notification) => {}
             Next::Host(_) | Next::Update(_) | Next::Retry => {
                 snapshot_due = true;
                 layout_due = true;
@@ -1101,7 +1187,7 @@ pub async fn run(
                 let quit = request.command == "quit";
                 let result = if request.command == "state" {
                     Ok(
-                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.session.document_ref(&app.machine).is_ok(),"metrics":{"renders":app.renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
+                        json!({"instance":instance,"session":config.session,"machine":app.machine,"view":app.view(),"connected":connected,"notice":app.notice,"document_version":app.session.documents.get(&app.machine).map(|s|s.version),"document_available":app.session.document_ref(&app.machine).is_ok(),"metrics":{"renders":app.renders,"retained_renders":app.retained_renders,"snapshot_builds":app.snapshot_builds,"layout_builds":app.layout_builds,"parsed_bytes":app.parsed_bytes,"attached":app.surfaces.values().filter(|s|s.stream.is_some()).count(),"cached":app.surfaces.len()},"panes":app.panes.iter().map(|p|json!({"id":p.id,"terminal":p.terminal})).collect::<Vec<_>>()}),
                     )
                 } else if quit {
                     Ok(json!({"ok":true}))
@@ -1153,6 +1239,8 @@ pub async fn run(
                     let edited = Host::suspend(|| crate::scrollback::edit(&text))?;
                     events = EventStream::new();
                     screen.clear()?;
+                    app.presented = Default::default();
+                    app.presented_cursor = None;
                     if let Err(error) = edited {
                         app.toast(error.to_string(), true);
                     }
@@ -1170,11 +1258,15 @@ pub async fn run(
                 dirty = true;
             }
             Next::Output(id, Ok(Some(StreamEvent::Data(bytes)))) => {
+                let shown = app.panes.iter().any(|pane| pane.id == id);
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     app.parsed_bytes += bytes.len() as u64;
                     let alternate = surface.vt.alt_screen();
                     surface.vt.write(&bytes);
-                    activate_layout |= alternate != surface.vt.alt_screen();
+                    surface.repaint.received(bytes.len());
+                    let switched = shown && alternate != surface.vt.alt_screen();
+                    activate_layout |= switched;
+                    dirty |= switched;
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
                     {
@@ -1182,11 +1274,13 @@ pub async fn run(
                         surface.stream = None;
                     }
                 }
-                dirty = true;
+                // Hidden panes parse to stay current but draw nothing until shown.
+                output_due |= shown;
             }
             Next::Output(id, outcome) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     surface.stream = None;
+                    surface.repaint.end();
                     surface.ended |= matches!(outcome, Ok(Some(StreamEvent::Closed(ref value))) if value["reason"] == "exited");
                     surface.error = Some(
                         if surface.ended {
@@ -1199,6 +1293,10 @@ pub async fn run(
                 }
                 dirty = true;
             }
+            // Agents animate their titles; only the host window title can show them.
+            Next::Update(Ok(notification)) if title_only(&notification) => {
+                app.update_window_title()?;
+            }
             Next::Update(Ok(notification)) => {
                 if matches!(notification, Notification::Missed(_))
                     && let Err(e) = app.refresh_identities().await
@@ -1206,9 +1304,11 @@ pub async fn run(
                     app.toast(e.to_string(), true);
                 }
                 if !matches!(notification, Notification::Heartbeat { .. }) {
-                    app.close_finished().await;
+                    if can_finish_pane(&notification) {
+                        app.close_finished().await;
+                    }
                     app.notification(&notification);
-                    dirty = true;
+                    event_due = true;
                 }
             }
             Next::Update(Err(e)) => {
@@ -1280,6 +1380,24 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_title_events_skip_redraws() {
+        let event = |kind: &str| {
+            Notification::Event(herdr_client_lib::protocol::Event {
+                seq: 1,
+                kind: kind.into(),
+                terminal: Some("t1".into()),
+                machine: None,
+                data: json!({}),
+            })
+        };
+        assert!(title_only(&event("title")));
+        assert!(can_finish_pane(&event("finished")) && can_finish_pane(&event("doc")));
+        assert!(!can_finish_pane(&event("status")) && !can_finish_pane(&event("labels")));
+        for kind in ["status", "turn", "labels", "size", "doc", "finished"] {
+            assert!(!title_only(&event(kind)), "{kind}");
+        }
+    }
     #[test]
     fn navigation_restores_tab_and_space_focus() {
         use herdr_client_lib::document::{Document, terminal_pane};

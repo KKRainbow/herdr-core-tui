@@ -25,9 +25,8 @@ The fifteen-pane output run used about 18% of one CPU core after redraw coalesci
 Output parsing and credit return continue between frames; rendering is capped near 60 Hz.
 
 Each VT bounds history to 10,000 lines and 10 MB, and image storage to 16 MB.
-Hidden streams detach; the cache prunes hidden surfaces when it exceeds 32 entries.
-Visible panes can exceed that cache threshold.
-The profile retains prior visible VTs during its hidden phase, so RSS need not fall when streams detach.
+Hidden panes on the current machine stay attached and parse output without redrawing.
+This table predates that change; its hidden phases detached streams and parsed no bytes.
 The library bounds queued stream bytes, frame size, pending calls, and control queues.
 Its regression tests cover unread streams, overflow isolation, detach cycles, deadlines, and RPC progress.
 No long-duration memory leak claim is made from this short profile.

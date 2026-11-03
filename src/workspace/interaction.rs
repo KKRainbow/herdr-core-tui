@@ -114,6 +114,7 @@ impl Workspace {
             && let Some(stream) = &surface.stream
         {
             stream.try_input(surface.vt.paste_bytes(text))?;
+            self.typed_at = Some(Instant::now());
         }
         Ok(())
     }
@@ -158,6 +159,7 @@ impl Workspace {
                 && let Some(stream) = &surface.stream
             {
                 stream.try_input(bytes)?;
+                self.typed_at = Some(Instant::now());
             }
         }
         Ok(())

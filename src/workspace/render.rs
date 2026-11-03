@@ -34,7 +34,7 @@ impl Workspace {
     }
 
     /// Herdr's `ui.window_title` on the outer terminal, written only when it changes.
-    fn update_window_title(&mut self) -> io::Result<()> {
+    pub(super) fn update_window_title(&mut self) -> io::Result<()> {
         use crate::window_title::{Token, hostname, parse, render};
         let Ok(Some(parts)) = parse(&self.preferences.ui.window_title) else {
             return Ok(());

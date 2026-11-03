@@ -941,6 +941,10 @@ fn machine_names(machines: &MachineList) -> Vec<String> {
     names.extend(machines.machines.iter().map(|m| m.name.clone()));
     names
 }
+/// A terminal title change: no pane, sidebar, or layout shows the terminal title.
+fn title_only(notification: &Notification) -> bool {
+    matches!(notification, Notification::Event(event) if event.kind == "title")
+}
 async fn next_output(
     surfaces: &mut BTreeMap<String, Surface>,
 ) -> (String, std::result::Result<Option<StreamEvent>, Error>) {
@@ -1122,6 +1126,7 @@ pub async fn run(
         _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
+            Next::Update(Ok(notification)) if title_only(notification) => {}
             Next::Host(_) | Next::Update(_) | Next::Retry => {
                 snapshot_due = true;
                 layout_due = true;
@@ -1247,6 +1252,10 @@ pub async fn run(
                 }
                 dirty = true;
             }
+            // Agents animate their titles; only the host window title can show them.
+            Next::Update(Ok(notification)) if title_only(&notification) => {
+                app.update_window_title()?;
+            }
             Next::Update(Ok(notification)) => {
                 if matches!(notification, Notification::Missed(_))
                     && let Err(e) = app.refresh_identities().await
@@ -1328,6 +1337,22 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_title_events_skip_redraws() {
+        let event = |kind: &str| {
+            Notification::Event(herdr_client_lib::protocol::Event {
+                seq: 1,
+                kind: kind.into(),
+                terminal: Some("t1".into()),
+                machine: None,
+                data: json!({}),
+            })
+        };
+        assert!(title_only(&event("title")));
+        for kind in ["status", "turn", "labels", "size", "doc", "finished"] {
+            assert!(!title_only(&event(kind)), "{kind}");
+        }
+    }
     #[test]
     fn navigation_restores_tab_and_space_focus() {
         use herdr_client_lib::document::{Document, terminal_pane};

@@ -4,7 +4,7 @@ root=os.environ["TUI_APP_TEST_ROOT"];assert root.startswith("/tmp/")
 env=dict(os.environ,HERDER_TUI_DISABLE_SOUND="1",HERDR_APP_HOME=root+"/app",XDG_RUNTIME_DIR=root+"/runtime",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",TERM="xterm-256color")
 config=pathlib.Path(root+"/config/herder-tui/config.toml");config.parent.mkdir(parents=True,exist_ok=True)
 config.write_text('[keys]\nnext_agent = "prefix+a"\n')
-record=json.loads(subprocess.check_output(["hc","run","--bg","--json","sh","-c","printf '\\033]7501;state=blocked\\033\\\\'; printf DETACHED_AGENT; sleep 60"],env=env))
+record=json.loads(subprocess.check_output(["hc","run","--bg","--json","sh","-c","printf '\\033]7501;state=blocked:app=codex\\033\\\\'; printf DETACHED_AGENT; sleep 60"],env=env))
 master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",32,120,0,0))
 binary=pathlib.Path(__file__).resolve().parents[1]/"target/debug/herder-tui"
 p=subprocess.Popen([str(binary),"--session",env["HC_SESSION"]],env=env,stdin=slave,stdout=slave,stderr=slave)

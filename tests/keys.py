@@ -41,7 +41,7 @@ command = "echo pane-command; sleep 60"
 type = "pane"
 description = "pane command"
 """)
-block = "printf '\\033]7501;state=working\\033\\\\'; sleep 3; printf '\\033]7501;state=blocked\\033\\\\'; sleep 180"
+block = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 3; printf '\\033]7501;state=blocked:app=codex\\033\\\\'; sleep 180"
 process = master = slave = None
 try:
     def do(command, args):
@@ -66,7 +66,8 @@ try:
         raise AssertionError(what)
 
     first = do("space.new", {"name": "First", "argv": ["sh"]})
-    second = do("space.new", {"name": "Second", "argv": ["sh", "-c", "sleep 180"]})
+    ordinary = "printf '\\033]7501;state=working:app=make\\033\\\\'; sleep 180"
+    second = do("space.new", {"name": "Second", "argv": ["sh", "-c", ordinary]})
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     process = subprocess.Popen([str(binary), "--instance", "keys"], env=core.env, stdin=slave, stdout=slave, stderr=slave)
@@ -78,7 +79,7 @@ try:
     os.write(master, b"\x1b1")
     until(lambda: state()["active_space"] == first["space"], "alt+1 did not switch workspace")
 
-    # An agent elsewhere blocks: prefix+o goes to it, prefix+alt+1 too.
+    # Agent focus skips the ordinary status reporter in the same workspace.
     agent = do("tab.new", {"space": second["space"], "argv": ["sh", "-c", block]})
     drain(5)
     os.write(master, b"\x1b1")

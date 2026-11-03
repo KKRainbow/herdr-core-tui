@@ -29,7 +29,9 @@ A session whose workspaces were all closed stays empty.
 The interface follows Herdr: a sidebar with spaces above and agents below, a tab bar above the panes, and Herdr's menus, prompts, and mode bar.
 Spaces show their state dot, name, and Git branch.
 Linked worktrees appear under their main checkout; click the arrow to collapse the group.
-The agents list shows terminals that report OSC 7501 status, including ones without a pane.
+The agents list shows recognized coding agents, including ones without a pane.
+Agents are identified by their OSC 7501 app name or current program, such as Codex, Claude Code, Pi, and OpenCode.
+Status reports from ordinary terminals do not add them to the agents list.
 Use the pane menu's `Move pane...` chooser to move a pane to a tab in any workspace on the current machine.
 Click `grouped` to sort agents by priority instead.
 A finish you did not watch stays marked done across restarts until you view it.

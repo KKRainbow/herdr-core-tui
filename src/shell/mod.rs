@@ -1,5 +1,6 @@
 //! Herdr's interface: chrome, overlays, and keymap adapted from Herdr's client shell
 //! and fed by `herdr-client-lib` documents and core terminal facts.
+mod agents;
 pub mod chrome;
 pub mod keys;
 pub mod mobile;

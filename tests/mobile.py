@@ -14,7 +14,7 @@ from fixture import Core
 
 binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
 core = Core("mobile")
-block = "printf '\\033]7501;state=blocked\\033\\\\'; sleep 180"
+block = "printf '\\033]7501;state=blocked:app=codex\\033\\\\'; sleep 180"
 process = master = slave = None
 log = bytearray()
 try:

@@ -13,8 +13,8 @@ import time
 from fixture import Core
 
 binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
-finish = "printf '\\033]7501;state=working\\033\\\\'; sleep 2; printf '\\033]7501;state=idle\\033\\\\'; sleep 180"
-block = "printf '\\033]7501;state=working\\033\\\\'; sleep 2; printf '\\033]7501;state=blocked\\033\\\\'; sleep 180"
+finish = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 2; printf '\\033]7501;state=idle:app=codex\\033\\\\'; sleep 180"
+block = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 2; printf '\\033]7501;state=blocked:app=codex\\033\\\\'; sleep 180"
 
 
 def run(name, toast, env, script, steps):
@@ -68,7 +68,7 @@ def run(name, toast, env, script, steps):
 
 
 def card_steps(core, wait_for, read_for, view, agent):
-    wait_for(b"sh finished")
+    wait_for(b"codex finished")
     assert view("state", {})["view"]["focused"] != agent["pane"]
     # prefix+o opens the card's agent.
     card_steps.send(b"\x02o")
@@ -90,7 +90,7 @@ try:
         while not (notified.exists() and "needs attention" in notified.read_text()) and time.monotonic() < end:
             read_for(.2)
         text = notified.read_text()
-        assert "sh needs attention" in text and "Notify · 1 · work" in text, text
+        assert "codex needs attention" in text and "Notify · 1 · work" in text, text
 
     run("notify-system", 'delivery = "system"\n', {"HERDER_TUI_NOTIFY_SEND": str(fake), "DISPLAY": ":99"}, block, system_steps)
 
@@ -111,7 +111,7 @@ finally:
 
 
 def terminal_steps(core, wait_for, read_for, view, agent):
-    wait_for(b"\x1b]9;sh finished: Notify")
+    wait_for(b"\x1b]9;codex finished: Notify")
 
 
 run("notify-terminal", 'delivery = "terminal"\n', {"TERM_PROGRAM": "WezTerm"}, finish, terminal_steps)

@@ -347,21 +347,23 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
         let address = record.address.as_str();
         let place = placed.get(address);
         let status = Status::from(sources.attention.status(identity, record.word()));
+        let agent = super::agents::label(record);
         if place.is_none() && record.is_live() {
             snapshot.loose.push(Loose {
                 address: address.into(),
-                label: model::program_label(record)
+                label: agent
+                    .or_else(|| model::program_label(record))
                     .unwrap_or("terminal")
                     .to_owned(),
                 cwd: cwd(record).unwrap_or_default().to_owned(),
                 agent_status: status,
-                reported: model::is_agent(record),
+                reported: agent.is_some(),
                 focused: sources.peek == Some(address),
             });
         }
-        if !model::is_agent(record) {
+        let Some(agent) = agent else {
             continue;
-        }
+        };
         let workspace_label = place
             .and_then(|(_, space, _)| snapshot.workspace(space))
             .map(|w| w.label.clone())
@@ -374,7 +376,6 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
                 )
             })
             .unwrap_or_else(|| address.to_owned());
-        let agent = model::program_label(record).map(str::to_owned);
         let pane_id = place
             .map(|(pane, _, _)| pane.clone())
             .unwrap_or_else(|| format!("@{address}"));
@@ -388,7 +389,7 @@ pub fn build(sources: &Sources<'_>) -> Snapshot {
             workspace_id: place.map(|(_, space, _)| space.clone()),
             tab_id: place.map(|(_, _, tab)| tab.clone()),
             workspace_label,
-            agent,
+            agent: Some(agent.to_owned()),
             title: status_title(record).map(str::to_owned),
             agent_status: status,
             state_change_seq: sources.attention.seq(identity),
@@ -432,6 +433,98 @@ mod tests {
     }
 
     #[test]
+    fn agents_list_excludes_ordinary_terminals_with_status_reports() {
+        let cases = [
+            (json!({"argv":["/bin/bash"]}), None),
+            (json!({"argv":["sh"],"reported":true}), None),
+            (
+                json!({"name":"codex","argv":["sh"],"status":{"state":"working"}}),
+                None,
+            ),
+            (
+                json!({"argv":["nvim"],"status":{"state":"blocked","app":"nvim"}}),
+                None,
+            ),
+            (json!({"argv":["make"],"status":{"state":"working"}}), None),
+            (json!({"argv":["sh","-c","codex"]}), None),
+            (json!({"argv":["node","-e","codex"]}), None),
+            (
+                json!({"argv":["sh"],"status":{"state":"working","app":"claude-code"}}),
+                Some("claude-code"),
+            ),
+            (json!({"argv":["/usr/bin/codex"]}), Some("codex")),
+            (
+                json!({"argv":["sh"],"foreground":{"name":"codex","argv":["codex"]}}),
+                Some("codex"),
+            ),
+            (
+                json!({"argv":["codex"],"foreground":{"name":"bash","argv":["bash"]},"reported":true}),
+                None,
+            ),
+            (
+                json!({"argv":["codex"],"status":{"state":"working","app":"make"}}),
+                None,
+            ),
+            (
+                json!({"argv":["codex"],"state":"finished","reported":true}),
+                None,
+            ),
+            (
+                json!({"argv":["node","/opt/bin/gemini.js"]}),
+                Some("gemini"),
+            ),
+            (json!({"argv":["C:\\bin\\Codex.EXE"]}), Some("Codex")),
+            (
+                json!({"status":{"state":"idle","app":"opencode"}}),
+                Some("opencode"),
+            ),
+            (json!({"status":{"state":"idle","app":"pi"}}), Some("pi")),
+            (
+                json!({"status":{"state":"idle","app":"github-copilot"}}),
+                Some("github-copilot"),
+            ),
+        ];
+        let document = json!({"spaces":[{"id":"s","tabs":[{"id":"tab","root":{
+            "type":"block","id":"p","content":{"terminal":"t"}
+        }}]}]});
+        for (mut value, expected) in cases {
+            value["address"] = json!("t");
+            if value["state"].is_null() {
+                value["state"] = json!("live");
+            }
+            let record: Terminal = serde_json::from_value(value.clone()).unwrap();
+            let live = record.is_live();
+            let terminals = BTreeMap::from([(identity("t"), record)]);
+            for placed in [true, false] {
+                let snapshot = build(&Sources {
+                    document: placed.then_some(&document),
+                    view: &View::default(),
+                    machine: "",
+                    terminals: &terminals,
+                    attention: &Attention::default(),
+                    home: "",
+                    git: &HashMap::new(),
+                    peek: None,
+                });
+                let agents: Vec<_> = snapshot.agents.iter().map(|a| a.agent.as_deref()).collect();
+                assert_eq!(
+                    agents,
+                    expected.map(Some).into_iter().collect::<Vec<_>>(),
+                    "{value}, placed={placed}"
+                );
+                assert_eq!(snapshot.panes.len(), usize::from(placed));
+                assert_eq!(snapshot.loose.len(), usize::from(!placed && live));
+                if let Some(loose) = snapshot.loose.first() {
+                    assert_eq!(loose.reported, expected.is_some(), "{value}");
+                    if let Some(agent) = expected {
+                        assert_eq!(loose.label, agent, "{value}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn projects_herdr_labels_status_and_unplaced_agents() {
         let doc = json!({"spaces":[
             {"id":"s1","name":"","folder":"/work/app","tabs":[
@@ -447,7 +540,7 @@ mod tests {
             ),
             (
                 identity("t2"),
-                serde_json::from_value::<Terminal>(json!({"address":"t2","status":{"state":"idle"},"reported":true})).unwrap(),
+                serde_json::from_value::<Terminal>(json!({"address":"t2","status":{"state":"idle","app":"codex"},"reported":true})).unwrap(),
             ),
             (
                 identity("t3"),
@@ -459,7 +552,7 @@ mod tests {
             ),
             (
                 identity("t9"),
-                serde_json::from_value::<Terminal>(json!({"address":"t9","state":"live","status":{"state":"blocked"},"reported":true,"labels":{"herdr.space":"s2"}})).unwrap(),
+                serde_json::from_value::<Terminal>(json!({"address":"t9","state":"live","status":{"state":"blocked","app":"opencode"},"reported":true,"labels":{"herdr.space":"s2"}})).unwrap(),
             ),
         ]);
         let mut attention = Attention::default();

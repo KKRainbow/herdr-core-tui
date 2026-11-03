@@ -329,9 +329,10 @@ impl Workspace {
         for (identity, address, alert) in alerts {
             self.notify(identity, &address, alert, now);
         }
-        if let Some(doc) = self.document() {
-            let view = self.view_mut();
-            view.reconcile(&doc);
+        let id = self.view_id();
+        if let Ok(doc) = self.session.document_ref(&self.machine) {
+            let view = self.views.entry(id).or_default();
+            view.reconcile(doc);
             if view.focused.is_none()
                 && let Some(pane) = doc.value()["spaces"].as_array().and_then(|s| {
                     s.iter().find_map(|s| {
@@ -341,7 +342,7 @@ impl Workspace {
                     })
                 })
             {
-                view.focus(&doc, pane);
+                view.focus(doc, pane);
             }
         }
     }
@@ -952,6 +953,13 @@ fn machine_names(machines: &MachineList) -> Vec<String> {
     names.extend(machines.machines.iter().map(|m| m.name.clone()));
     names
 }
+/// Only these can leave a finished terminal placed; the retry tick catches anything else.
+fn can_finish_pane(notification: &Notification) -> bool {
+    match notification {
+        Notification::Event(event) => matches!(event.kind.as_str(), "finished" | "doc"),
+        _ => true,
+    }
+}
 /// A terminal title change: no pane, sidebar, or layout shows the terminal title.
 fn title_only(notification: &Notification) -> bool {
     matches!(notification, Notification::Event(event) if event.kind == "title")
@@ -1080,6 +1088,8 @@ pub async fn run(
     let mut dirty = true;
     // Only visible terminals printed since the last frame.
     let mut output_due = false;
+    // Core events changed what the frame shows; they share the output clock.
+    let mut event_due = false;
     let mut activate_layout = true;
     let mut snapshot_due = false;
     let mut layout_due = true;
@@ -1102,7 +1112,7 @@ pub async fn run(
             }
             snapshot_due = false;
         }
-        if (dirty || output_due) && render_due {
+        if (dirty || output_due || event_due) && render_due {
             let area = screen.size()?;
             let area = Rect::new(0, 0, area.width, area.height);
             if layout_due || activate_layout || area != app.area {
@@ -1114,13 +1124,14 @@ pub async fn run(
             activate_layout = false;
             layout_due = false;
             if app.repaint_pending().is_none() {
-                if dirty || !app.draw_output(&mut screen)? {
+                if dirty || event_due || !app.draw_output(&mut screen)? {
                     let resized = app.draw(&mut screen)?;
                     dirty = resized;
                     activate_layout |= resized;
                     layout_due |= resized;
                 }
                 output_due = false;
+                event_due = false;
                 render_due = false;
             }
         }
@@ -1148,7 +1159,7 @@ pub async fn run(
         _=retry.tick()=>Next::Retry,
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
         _=redraw.tick(),if dirty||output_due&&typing=>Next::Paint,
-        _=output_clock.tick(),if output_due&&!typing=>Next::Paint,
+        _=output_clock.tick(),if output_due&&!typing||event_due=>Next::Paint,
         _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
@@ -1293,9 +1304,11 @@ pub async fn run(
                     app.toast(e.to_string(), true);
                 }
                 if !matches!(notification, Notification::Heartbeat { .. }) {
-                    app.close_finished().await;
+                    if can_finish_pane(&notification) {
+                        app.close_finished().await;
+                    }
                     app.notification(&notification);
-                    dirty = true;
+                    event_due = true;
                 }
             }
             Next::Update(Err(e)) => {
@@ -1379,6 +1392,8 @@ mod tests {
             })
         };
         assert!(title_only(&event("title")));
+        assert!(can_finish_pane(&event("finished")) && can_finish_pane(&event("doc")));
+        assert!(!can_finish_pane(&event("status")) && !can_finish_pane(&event("labels")));
         for kind in ["status", "turn", "labels", "size", "doc", "finished"] {
             assert!(!title_only(&event(kind)), "{kind}");
         }

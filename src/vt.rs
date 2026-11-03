@@ -2,6 +2,9 @@
 use ghostty_sys::*;
 use std::{ffi::c_void, sync::Arc};
 const BRACKETED_PASTE: GhosttyMode = 2004;
+const SYNC_OUTPUT: GhosttyMode = 2026;
+/// How long a program may hold its screen, as in herdr-app and Ghostty.
+const MAX_HOLD: std::time::Duration = std::time::Duration::from_millis(1000);
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -113,7 +116,26 @@ fn install_png_decoder() {
     });
 }
 
+/// Synchronized output (mode 2026), copied from herdr-app: when a program
+/// starts drawing a frame, the render state keeps its finished frame until it ends.
+struct Hold {
+    state: GhosttyRenderState,
+    since: Option<std::time::Instant>,
+}
+unsafe extern "C" fn on_render_hold(term: GhosttyTerminal, userdata: *mut c_void, held: bool) {
+    let hold = unsafe { &mut *(userdata as *mut Hold) };
+    if held {
+        // Capture the finished frame the program wants on screen before it redraws.
+        unsafe { ghostty_render_state_update(hold.state, term) };
+        hold.since = Some(std::time::Instant::now());
+    } else {
+        hold.since = None;
+    }
+}
+
 pub struct Vt {
+    /// Boxed so its address, given to libghostty as callback userdata, stays fixed.
+    hold: Box<Hold>,
     /// A requested local clear waiting for the stream to reach ground.
     clear_pending: bool,
     cached_rows: Vec<Arc<Vec<Cell>>>,
@@ -137,6 +159,10 @@ impl Vt {
         install_png_decoder();
         unsafe {
             let mut vt = Self {
+                hold: Box::new(Hold {
+                    state: std::ptr::null_mut(),
+                    since: None,
+                }),
                 clear_pending: false,
                 cached_rows: Vec::new(),
                 cached_colors: None,
@@ -158,6 +184,19 @@ impl Vt {
             ok(
                 ghostty_render_state_new(std::ptr::null(), &mut vt.state),
                 "render state",
+            );
+            vt.hold.state = vt.state;
+            let hold: *mut Hold = &mut *vt.hold;
+            ghostty_terminal_set(
+                vt.term,
+                GHOSTTY_TERMINAL_OPT_USERDATA,
+                hold as *const c_void,
+            );
+            let callback: GhosttyTerminalRenderHoldFn = Some(on_render_hold);
+            ghostty_terminal_set(
+                vt.term,
+                GHOSTTY_TERMINAL_OPT_RENDER_HOLD,
+                std::mem::transmute::<GhosttyTerminalRenderHoldFn, *const c_void>(callback),
             );
             ok(
                 ghostty_render_state_row_iterator_new(std::ptr::null(), &mut vt.rows_it),
@@ -510,7 +549,26 @@ impl Vt {
     }
     pub fn frame(&mut self) -> Frame {
         unsafe {
-            ghostty_render_state_update(self.state, self.term);
+            if self
+                .hold
+                .since
+                .is_some_and(|since| since.elapsed() > MAX_HOLD)
+            {
+                let mode = GhosttyTerminalModeConfig {
+                    mode: SYNC_OUTPUT,
+                    value: false,
+                };
+                ghostty_terminal_set(
+                    self.term,
+                    GHOSTTY_TERMINAL_OPT_MODE,
+                    &mode as *const _ as *const c_void,
+                );
+                self.hold.since = None;
+            }
+            // While held, draw the frame captured when the hold began.
+            if self.hold.since.is_none() {
+                ghostty_render_state_update(self.state, self.term);
+            }
             let mut colors = GhosttyRenderStateColors {
                 size: std::mem::size_of::<GhosttyRenderStateColors>(),
                 ..Default::default()
@@ -645,6 +703,8 @@ impl Vt {
         };
         scroll.value.row = row as usize;
         unsafe { ghostty_terminal_scroll_viewport(self.term, scroll) };
+        // Scrolling shows live content, as Ghostty allows, even while a program holds its frame.
+        self.hold.since = None;
     }
     pub fn hyperlink(&self, x: u16, y: u16) -> Option<String> {
         unsafe {
@@ -969,6 +1029,20 @@ impl Drop for Vt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn synchronized_output_shows_the_frame_from_before_the_hold() {
+        let mut vt = Vt::new(10, 2);
+        let first = |vt: &mut Vt| vt.frame().rows[0][0].text.clone();
+        vt.write(b"A");
+        assert_eq!(first(&mut vt), "A");
+        vt.write(b"\x1b[?2026h\rB");
+        assert_eq!(first(&mut vt), "A");
+        vt.write(b"\x1b[?2026l");
+        assert_eq!(first(&mut vt), "B");
+        vt.write(b"\x1b[?2026h\rC");
+        vt.hold.since = Some(std::time::Instant::now() - MAX_HOLD * 2);
+        assert_eq!(first(&mut vt), "C", "a hold past its limit ends");
+    }
     #[test]
     fn graphics_and_links_remain_inside_terminal_cells() {
         let mut vt = Vt::new(20, 4);

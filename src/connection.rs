@@ -4,8 +4,36 @@ use herdr_client_lib::{
     transport::HcConfig,
 };
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 const DEADLINE: Duration = Duration::from_secs(3);
+/// Core sends stream output in frames of at most this size (herdr-core `wire::CHUNK`).
+/// A shorter frame means core's queue for the stream has drained.
+const CORE_CHUNK: usize = 16 * 1024;
+/// The longest a pane waits for its attach repaint before drawing what it has.
+const REPAINT_WAIT: Duration = Duration::from_millis(250);
+
+/// An attach repaint still arriving. Drawing waits for it, so a long history
+/// shows in its final state instead of replaying on screen.
+#[derive(Default)]
+pub struct Repaint(Option<Instant>);
+impl Repaint {
+    pub fn start(&mut self) {
+        self.0 = Some(Instant::now() + REPAINT_WAIT);
+    }
+    /// Core queues the whole repaint at attach, so the first short frame ends it.
+    pub fn received(&mut self, bytes: usize) {
+        if bytes < CORE_CHUNK {
+            self.0 = None;
+        }
+    }
+    pub fn end(&mut self) {
+        self.0 = None;
+    }
+    /// When drawing stops waiting, while the repaint is still arriving.
+    pub fn pending_until(&self) -> Option<Instant> {
+        self.0.filter(|deadline| *deadline > Instant::now())
+    }
+}
 
 pub struct Connection {
     pub client: Client,
@@ -97,4 +125,23 @@ pub fn size(record: &Terminal, fallback: (u16, u16)) -> (u16, u16) {
         Some(record.cols).filter(|n| *n > 0).unwrap_or(fallback.0),
         Some(record.rows).filter(|n| *n > 0).unwrap_or(fallback.1),
     )
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn repaint_waits_for_the_first_short_frame_or_the_deadline() {
+        let mut repaint = Repaint::default();
+        assert!(repaint.pending_until().is_none());
+        repaint.start();
+        repaint.received(CORE_CHUNK);
+        assert!(repaint.pending_until().is_some());
+        repaint.received(CORE_CHUNK - 1);
+        assert!(repaint.pending_until().is_none());
+        repaint.start();
+        repaint.end();
+        assert!(repaint.pending_until().is_none());
+        repaint.0 = Some(Instant::now());
+        assert!(repaint.pending_until().is_none());
+    }
 }

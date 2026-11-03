@@ -133,10 +133,12 @@ async fn run() -> Result<()> {
     let mut interrupt = Box::pin(tokio::signal::ctrl_c());
     let mut focused = true;
     let mut dirty = true;
+    let mut repaint = connection::Repaint::default();
+    repaint.start();
     let mut retry = tokio::time::interval(Duration::from_secs(1));
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        if dirty {
+        if dirty && repaint.pending_until().is_none() {
             draw(&mut screen, &mut vt)?;
             dirty = false;
         }
@@ -145,7 +147,7 @@ async fn run() -> Result<()> {
                 _=&mut interrupt=>break,
                 result=connection::Connection::connect(&config,&target,size,true)=> {
                     match result {
-                        Ok(new)=>{let dimensions=new.size();vt=vt::Vt::new(dimensions.0,dimensions.1);connection=Some(new);dirty=true;}
+                        Ok(new)=>{let dimensions=new.size();vt=vt::Vt::new(dimensions.0,dimensions.1);connection=Some(new);repaint.start();dirty=true;}
                         Err(_)=>{tokio::select! { _=retry.tick()=>{}, event=events.next()=>{if handle_offline(event, &mut size)? {break;}} }}
                     }
                 }
@@ -171,7 +173,8 @@ async fn run() -> Result<()> {
         match next {
             Next::Output(Ok(Some(StreamEvent::Data(bytes)))) => {
                 vt.write(&bytes);
-                draw(&mut screen, &mut vt)?;
+                repaint.received(bytes.len());
+                dirty = true;
                 if current
                     .stream
                     .as_ref()
@@ -209,6 +212,7 @@ async fn run() -> Result<()> {
                 if current.attach(size).await.is_ok() {
                     let dimensions = current.size();
                     vt = vt::Vt::new(dimensions.0, dimensions.1);
+                    repaint.start();
                     dirty = true;
                 }
             }

@@ -45,6 +45,7 @@ struct Surface {
     retry_at: Instant,
     address: String,
     stream: Option<Stream>,
+    repaint: crate::connection::Repaint,
     vt: Vt,
     copy: Option<Copy>,
     wanted: (u16, u16),
@@ -578,6 +579,7 @@ impl Workspace {
                 retry_at: Instant::now(),
                 address: address.clone(),
                 stream: None,
+                repaint: Default::default(),
                 vt: Vt::new(wanted.0, wanted.1),
                 copy: None,
                 wanted,
@@ -626,6 +628,7 @@ impl Workspace {
                         let size = crate::connection::size(&record, wanted);
                         surface.vt = Vt::new(size.0, size.1);
                         surface.stream = Some(stream);
+                        surface.repaint.start();
                         surface.error = None;
                         surface.wanted = wanted;
                     }
@@ -645,6 +648,13 @@ impl Workspace {
             }
         }
         Ok(())
+    }
+    /// When drawing stops waiting for visible panes' attach repaints, while one is arriving.
+    fn repaint_pending(&self) -> Option<Instant> {
+        self.panes
+            .iter()
+            .filter_map(|pane| self.surfaces.get(&pane.id)?.repaint.pending_until())
+            .min()
     }
     fn active_id(&self) -> Option<String> {
         self.peek
@@ -1079,13 +1089,16 @@ pub async fn run(
             }
             activate_layout = false;
             layout_due = false;
-            // The host can resize while streams resize; redraw at the size the frame used.
-            let resized = app.draw(&mut screen)?;
-            dirty = resized;
-            activate_layout |= resized;
-            layout_due |= resized;
-            render_due = false;
+            if app.repaint_pending().is_none() {
+                // The host can resize while streams resize; redraw at the size the frame used.
+                let resized = app.draw(&mut screen)?;
+                dirty = resized;
+                activate_layout |= resized;
+                layout_due |= resized;
+                render_due = false;
+            }
         }
+        let repaint = app.repaint_pending();
         enum Next {
             Host(Option<io::Result<Event>>),
             Output(String, std::result::Result<Option<StreamEvent>, Error>),
@@ -1106,6 +1119,7 @@ pub async fn run(
         _=retry.tick()=>Next::Retry,
         _=notify.tick(),if app.notifications.active()=>Next::Notify,
         _=redraw.tick(),if dirty=>Next::Paint,
+        _=tokio::time::sleep_until(repaint.unwrap_or_else(Instant::now).into()),if repaint.is_some()=>Next::Paint,
         };
         match &next {
             Next::Host(_) | Next::Update(_) | Next::Retry => {
@@ -1205,6 +1219,7 @@ pub async fn run(
                     app.parsed_bytes += bytes.len() as u64;
                     let alternate = surface.vt.alt_screen();
                     surface.vt.write(&bytes);
+                    surface.repaint.received(bytes.len());
                     activate_layout |= shown && alternate != surface.vt.alt_screen();
                     if let Some(stream) = &surface.stream
                         && let Err(e) = stream.consumed(bytes.len() as u32).await
@@ -1219,6 +1234,7 @@ pub async fn run(
             Next::Output(id, outcome) => {
                 if let Some(surface) = app.surfaces.get_mut(&id) {
                     surface.stream = None;
+                    surface.repaint.end();
                     surface.ended |= matches!(outcome, Ok(Some(StreamEvent::Closed(ref value))) if value["reason"] == "exited");
                     surface.error = Some(
                         if surface.ended {

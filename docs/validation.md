@@ -101,3 +101,30 @@ The TUI checks used an isolated copy to exclude concurrent changes in `src/vt.rs
 The library real-core suite and TUI PTY lifecycle, startup, compatibility, remote, geometry, and CLI checks pass.
 Finished panes close through version-checked library edits, with retries after conflicts.
 Missing records, lost live terminals, and unavailable machine documents do not trigger closure.
+
+## Host terminal colors
+
+Rechecked on Linux on 2026-11-04 with hc 0.1.17.
+ANSI palette indices and default colors now reach the host terminal unchanged
+in both workspace and single-terminal views. Truecolor stays RGB, and inverse
+uses the host's reverse-video attribute.
+
+The regression failed against the original installed binary: ANSI red index 1
+became fixed RGB(204,102,102). The corrected binary passes `tests/colors.py`
+against an isolated core in both views, including input, detach, terminal
+settings restoration, and surviving core terminals.
+
+Formatting passes. Release unit tests pass with 67 passed and one existing
+ignored test. CLI, compatibility, remote, and geometry integration checks pass.
+Strict Clippy remains blocked by existing warnings in unchanged
+`src/shell/keys.rs` (`nonminimal_bool`) and `src/workspace/interaction.rs`
+(`collapsible_match`).
+
+Final review found two minor limits, deferred:
+
+- An explicit palette or default-color override equal to Ghostty's initial
+  RGB value is indistinguishable from an unchanged value. It inherits the
+  host color instead of preserving that explicit RGB override.
+- Transparent images are composited against Ghostty's internal palette.
+  When the host palette differs, transparent regions over indexed backgrounds
+  can differ from the surrounding background.

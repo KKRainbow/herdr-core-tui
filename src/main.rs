@@ -26,11 +26,7 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use herdr_client_lib::client::StreamEvent;
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    style::{Color, Modifier, Style},
-};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     io::{self, stdout},
     time::Duration,
@@ -296,35 +292,7 @@ fn draw(screen: &mut Terminal<CrosstermBackend<io::Stdout>>, vt: &mut vt::Vt) ->
         let area = frame.area();
         let buffer = frame.buffer_mut();
         for (y, row) in snapshot.rows.iter().take(area.height as usize).enumerate() {
-            let mut tail = false;
-            for (x, cell) in row.iter().take(area.width as usize).enumerate() {
-                if tail {
-                    tail = false;
-                    continue;
-                }
-                let mut style = Style::default()
-                    .fg(color(cell.fg))
-                    .bg(color(cell.bg.unwrap_or(snapshot.bg)));
-                for (enabled, modifier) in [
-                    (cell.bold, Modifier::BOLD),
-                    (cell.faint, Modifier::DIM),
-                    (cell.italic, Modifier::ITALIC),
-                    (cell.underline, Modifier::UNDERLINED),
-                    (cell.strike, Modifier::CROSSED_OUT),
-                ] {
-                    if enabled {
-                        style = style.add_modifier(modifier);
-                    }
-                }
-                buffer[(x as u16, y as u16)]
-                    .set_symbol(if cell.text.is_empty() {
-                        " "
-                    } else {
-                        &cell.text
-                    })
-                    .set_style(style);
-                tail = cell.wide;
-            }
+            paint::row(buffer, area, y as u16, row, None);
         }
         if let Some((x, y)) = snapshot
             .cursor
@@ -334,7 +302,4 @@ fn draw(screen: &mut Terminal<CrosstermBackend<io::Stdout>>, vt: &mut vt::Vt) ->
         }
     })?;
     Ok(())
-}
-fn color(rgb: vt::Rgb) -> Color {
-    Color::Rgb(rgb.0, rgb.1, rgb.2)
 }

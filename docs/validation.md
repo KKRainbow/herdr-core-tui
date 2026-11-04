@@ -128,3 +128,34 @@ Final review found two minor limits, deferred:
 - Transparent images are composited against Ghostty's internal palette.
   When the host palette differs, transparent regions over indexed backgrounds
   can differ from the surrounding background.
+
+### Background queries
+
+Rechecked on Linux on 2026-11-04 with hc 0.1.17 and codex-cli 0.166.0.
+The viewer now probes the host's default foreground and background before
+starting its event reader, using `terminal-colorsaurus`. The probe has a
+500 ms timeout. Headless commands do not probe, and an unsuccessful probe
+leaves the display facts unspecified. Both views send the detected colors
+through the existing attach `display` field, including after reconnect.
+
+`tests/colors.py` covers OSC 10/11 queries and derived prompt backgrounds
+against an isolated core, with black, light, and nonresponding hosts in
+both views. The previous binary reports Ghostty's `#282c34` background
+and renders the dark prompt as RGB(65,69,76). With a black host, the new
+binary reports black and renders RGB(30,30,30). Foreground, detach, retained
+terminal processes, and host settings restoration are also checked.
+Both views also receive SIGINT while the host probe is waiting; they exit
+through the registered interrupt handler and restore the original settings.
+
+A real Codex process was started in an isolated core after the workspace
+viewer attached to a simulated black host. Its prompt emitted RGB(30,30,30),
+matching the official Herdr capture. No prompt was submitted to the model.
+Release unit tests still pass with 67 passed and one existing ignored test.
+The same two preexisting strict Clippy warnings remain.
+CLI, compatibility, remote, and geometry integration checks pass.
+
+Host colors are detected at viewer startup. Codex can cache startup colors,
+so reopen an existing Codex process after restarting the corrected viewer.
+Final review also confirmed a minor dependency limit: if a host color reply
+is split immediately after ESC, `terminal-colorsaurus` can mistake the reply
+for an unsupported query and leave display facts unspecified.

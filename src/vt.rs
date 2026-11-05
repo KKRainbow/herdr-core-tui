@@ -164,8 +164,12 @@ struct Hold {
     state: GhosttyRenderState,
     since: Option<std::time::Instant>,
 }
+struct Callbacks {
+    hold: Hold,
+    size_report: Option<Vec<u8>>,
+}
 unsafe extern "C" fn on_render_hold(term: GhosttyTerminal, userdata: *mut c_void, held: bool) {
-    let hold = unsafe { &mut *(userdata as *mut Hold) };
+    let hold = unsafe { &mut (*(userdata as *mut Callbacks)).hold };
     if held {
         // Capture the finished frame the program wants on screen before it redraws.
         unsafe { ghostty_render_state_update(hold.state, term) };
@@ -175,9 +179,45 @@ unsafe extern "C" fn on_render_hold(term: GhosttyTerminal, userdata: *mut c_void
     }
 }
 
+unsafe extern "C" fn on_write_pty(
+    _: GhosttyTerminal,
+    userdata: *mut c_void,
+    data: *const u8,
+    len: usize,
+) {
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    // Core answers queries itself, but leaves in-band resize reports to viewers.
+    if bytes.starts_with(b"\x1b[48;") {
+        let callbacks = unsafe { &mut *(userdata as *mut Callbacks) };
+        callbacks.size_report = Some(bytes.to_vec());
+    }
+}
+
+unsafe extern "C" fn on_size(
+    term: GhosttyTerminal,
+    _: *mut c_void,
+    size: *mut GhosttySizeReportSize,
+) -> bool {
+    let size = unsafe { &mut *size };
+    size.cell_width = 1;
+    size.cell_height = 2;
+    unsafe {
+        ghostty_terminal_get(
+            term,
+            GHOSTTY_TERMINAL_DATA_COLS,
+            &mut size.columns as *mut _ as *mut c_void,
+        ) == GHOSTTY_SUCCESS
+            && ghostty_terminal_get(
+                term,
+                GHOSTTY_TERMINAL_DATA_ROWS,
+                &mut size.rows as *mut _ as *mut c_void,
+            ) == GHOSTTY_SUCCESS
+    }
+}
+
 pub struct Vt {
     /// Boxed so its address, given to libghostty as callback userdata, stays fixed.
-    hold: Box<Hold>,
+    callbacks: Box<Callbacks>,
     /// A requested local clear waiting for the stream to reach ground.
     clear_pending: bool,
     cached_rows: Vec<Arc<Vec<Cell>>>,
@@ -202,9 +242,12 @@ impl Vt {
         install_png_decoder();
         unsafe {
             let mut vt = Self {
-                hold: Box::new(Hold {
-                    state: std::ptr::null_mut(),
-                    since: None,
+                callbacks: Box::new(Callbacks {
+                    hold: Hold {
+                        state: std::ptr::null_mut(),
+                        since: None,
+                    },
+                    size_report: None,
                 }),
                 clear_pending: false,
                 cached_rows: Vec::new(),
@@ -232,12 +275,30 @@ impl Vt {
                 ghostty_render_state_new(std::ptr::null(), &mut vt.state),
                 "render state",
             );
-            vt.hold.state = vt.state;
-            let hold: *mut Hold = &mut *vt.hold;
+            vt.callbacks.hold.state = vt.state;
+            let callbacks: *mut Callbacks = &mut *vt.callbacks;
             ghostty_terminal_set(
                 vt.term,
                 GHOSTTY_TERMINAL_OPT_USERDATA,
-                hold as *const c_void,
+                callbacks as *const c_void,
+            );
+            let callback: GhosttyTerminalWritePtyFn = Some(on_write_pty);
+            ok(
+                ghostty_terminal_set(
+                    vt.term,
+                    GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+                    std::mem::transmute::<GhosttyTerminalWritePtyFn, *const c_void>(callback),
+                ),
+                "write pty callback",
+            );
+            let callback: GhosttyTerminalSizeFn = Some(on_size);
+            ok(
+                ghostty_terminal_set(
+                    vt.term,
+                    GHOSTTY_TERMINAL_OPT_SIZE,
+                    std::mem::transmute::<GhosttyTerminalSizeFn, *const c_void>(callback),
+                ),
+                "size callback",
             );
             let callback: GhosttyTerminalRenderHoldFn = Some(on_render_hold);
             ghostty_terminal_set(
@@ -622,9 +683,13 @@ impl Vt {
         self.rows = rows.max(1);
         unsafe { ghostty_terminal_resize(self.term, self.cols, self.rows, 1, 2) };
     }
+    pub fn take_size_report(&mut self) -> Option<Vec<u8>> {
+        self.callbacks.size_report.take()
+    }
     pub fn frame(&mut self) -> Frame {
         unsafe {
             if self
+                .callbacks
                 .hold
                 .since
                 .is_some_and(|since| since.elapsed() > MAX_HOLD)
@@ -638,10 +703,10 @@ impl Vt {
                     GHOSTTY_TERMINAL_OPT_MODE,
                     &mode as *const _ as *const c_void,
                 );
-                self.hold.since = None;
+                self.callbacks.hold.since = None;
             }
             // While held, draw the frame captured when the hold began.
-            if self.hold.since.is_none() {
+            if self.callbacks.hold.since.is_none() {
                 ghostty_render_state_update(self.state, self.term);
             }
             let mut colors = GhosttyRenderStateColors {
@@ -784,7 +849,7 @@ impl Vt {
         scroll.value.row = row as usize;
         unsafe { ghostty_terminal_scroll_viewport(self.term, scroll) };
         // Scrolling shows live content, as Ghostty allows, even while a program holds its frame.
-        self.hold.since = None;
+        self.callbacks.hold.since = None;
     }
     pub fn hyperlink(&self, x: u16, y: u16) -> Option<String> {
         unsafe {
@@ -1165,8 +1230,32 @@ mod tests {
         vt.write(b"\x1b[?2026l");
         assert_eq!(first(&mut vt), "B");
         vt.write(b"\x1b[?2026h\rC");
-        vt.hold.since = Some(std::time::Instant::now() - MAX_HOLD * 2);
+        vt.callbacks.hold.since = Some(std::time::Instant::now() - MAX_HOLD * 2);
         assert_eq!(first(&mut vt), "C", "a hold past its limit ends");
+    }
+    #[test]
+    fn in_band_size_reports_follow_enable_resize_and_disable() {
+        let mut vt = Vt::new(80, 24);
+        vt.resize(90, 30);
+        assert_eq!(vt.take_size_report(), None);
+        for _ in 0..2 {
+            vt.write(b"\x1b[?2048h");
+            assert_eq!(
+                vt.take_size_report().as_deref(),
+                Some(b"\x1b[48;30;90;60;90t".as_slice())
+            );
+            assert_eq!(vt.take_size_report(), None);
+        }
+        vt.resize(100, 40);
+        assert_eq!(
+            vt.take_size_report().as_deref(),
+            Some(b"\x1b[48;40;100;80;100t".as_slice())
+        );
+        vt.write(b"\x1b[?2048l");
+        vt.resize(80, 24);
+        assert_eq!(vt.take_size_report(), None);
+        vt.write(b"\x1b[c\x1b[6n\x1b[18t");
+        assert_eq!(vt.take_size_report(), None);
     }
     #[test]
     fn graphics_and_links_remain_inside_terminal_cells() {

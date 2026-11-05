@@ -777,13 +777,13 @@ impl Workspace {
         }
         Ok(result)
     }
-    fn notification(&mut self, notification: &Notification) {
+    async fn notification(&mut self, notification: &Notification) -> Result<()> {
         let event = match notification {
             Notification::Event(event) => Some(event),
             _ => None,
         };
         let address = event.and_then(|e| e.terminal.as_deref());
-        for surface in self.surfaces.values_mut() {
+        for (id, surface) in &mut self.surfaces {
             if address == Some(&surface.address) {
                 match event.map(|e| e.kind.as_str()) {
                     Some("size") => {
@@ -798,6 +798,14 @@ impl Workspace {
                         surface
                             .vt
                             .resize(dimension("cols", fallback.0), dimension("rows", fallback.1));
+                        if let Some(report) = surface.vt.take_size_report()
+                            && self.focused
+                            && surface.wanted == (surface.vt.cols, surface.vt.rows)
+                            && self.panes.iter().any(|pane| &pane.id == id)
+                            && let Some(stream) = &surface.stream
+                        {
+                            stream.input(report).await?;
+                        }
                     }
                     Some("restarted" | "lost") => {
                         surface.stream = None;
@@ -814,6 +822,7 @@ impl Workspace {
             self.invalidate_git();
         }
         self.reconcile();
+        Ok(())
     }
     fn save_attention(&mut self) {
         let Ok(text) = serde_json::to_string(&self.attention) else {
@@ -1271,11 +1280,23 @@ pub async fn run(
                     let switched = shown && alternate != surface.vt.alt_screen();
                     activate_layout |= switched;
                     dirty |= switched;
-                    if let Some(stream) = &surface.stream
-                        && let Err(e) = stream.consumed(bytes.len() as u32).await
-                    {
-                        surface.error = Some(e.to_string());
-                        surface.stream = None;
+                    if let Some(stream) = &surface.stream {
+                        let report = surface.vt.take_size_report().filter(|_| {
+                            shown
+                                && app.focused
+                                && surface.wanted == (surface.vt.cols, surface.vt.rows)
+                        });
+                        let result = async {
+                            if let Some(report) = report {
+                                stream.input(report).await?;
+                            }
+                            stream.consumed(bytes.len() as u32).await
+                        }
+                        .await;
+                        if let Err(e) = result {
+                            surface.error = Some(e.to_string());
+                            surface.stream = None;
+                        }
                     }
                 }
                 // Hidden panes parse to stay current but draw nothing until shown.
@@ -1311,7 +1332,9 @@ pub async fn run(
                     if can_finish_pane(&notification) {
                         app.close_finished().await;
                     }
-                    app.notification(&notification);
+                    if let Err(e) = app.notification(&notification).await {
+                        app.toast(e.to_string(), true);
+                    }
                     event_due = true;
                 }
             }

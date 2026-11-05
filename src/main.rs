@@ -202,14 +202,18 @@ async fn run() -> Result<()> {
                 vt.write(&bytes);
                 repaint.received(bytes.len());
                 dirty = true;
-                if current
-                    .stream
-                    .as_ref()
-                    .unwrap()
-                    .consumed(bytes.len() as u32)
-                    .await
-                    .is_err()
-                {
+                let stream = current.stream.as_ref().unwrap();
+                let result = async {
+                    if let Some(report) = vt.take_size_report()
+                        && focused
+                        && (vt.cols, vt.rows) == size
+                    {
+                        stream.input(report).await?;
+                    }
+                    stream.consumed(bytes.len() as u32).await
+                }
+                .await;
+                if result.is_err() {
                     connection = None;
                 }
             }
@@ -227,6 +231,14 @@ async fn run() -> Result<()> {
                     if changed {
                         let dimensions = current.size();
                         vt.resize(dimensions.0, dimensions.1);
+                        if let Some(report) = vt.take_size_report()
+                            && focused
+                            && dimensions == size
+                            && let Some(stream) = &current.stream
+                            && stream.input(report).await.is_err()
+                        {
+                            connection = None;
+                        }
                         dirty = true;
                     }
                 }

@@ -435,6 +435,16 @@ impl Workspace {
         );
         let body = self.layout.pane_surface;
         self.panes.clear();
+        // Preview the divider locally; release publishes the final shared layout.
+        let preview = if let Some(Drag::Splitter(resize)) = &self.drag {
+            self.document().and_then(|mut doc| {
+                doc.resize_between(&resize.splitter.id, &resize.splitter.next, resize.value)
+                    .ok()
+                    .map(|()| doc)
+            })
+        } else {
+            None
+        };
         if let Some(address) = &self.peek {
             self.panes.push(Pane {
                 id: format!("@{address}"),
@@ -445,7 +455,9 @@ impl Workspace {
                 borders: ratatui::widgets::Borders::NONE,
                 scrollbar: None,
             });
-        } else if let Ok(doc) = self.session.document_ref(&self.machine)
+        } else if let Some(doc) = preview
+            .as_ref()
+            .or_else(|| self.session.document_ref(&self.machine).ok())
             && let Some(root) = view
                 .active_tab
                 .as_deref()

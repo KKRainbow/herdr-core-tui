@@ -3,7 +3,7 @@ import json,os,pathlib,select,subprocess,tempfile
 class Core:
  def __init__(self,name,environment=None):
   self.temporary=tempfile.TemporaryDirectory(prefix="tui-"+name+"-");self.root=pathlib.Path(self.temporary.name)
-  self.env=dict(os.environ,HERDER_TUI_DISABLE_SOUND="1",HC_SESSION=name,XDG_RUNTIME_DIR=str(self.root/"run"),XDG_STATE_HOME=str(self.root/"state"),XDG_CONFIG_HOME=str(self.root/"config"),HERDR_APP_HOME=str(self.root/"app"),TERM="xterm-256color")
+  self.env=dict(os.environ,HERDR_TUI_DISABLE_SOUND="1",HC_SESSION=name,XDG_RUNTIME_DIR=str(self.root/"run"),XDG_STATE_HOME=str(self.root/"state"),XDG_CONFIG_HOME=str(self.root/"config"),HERDR_APP_HOME=str(self.root/"app"),TERM="xterm-256color")
   # Never reach the person's desktop clipboard or notifications; tests opt in.
   for name in ("WAYLAND_DISPLAY","DISPLAY"):self.env.pop(name,None)
   self.env.update(environment or {})

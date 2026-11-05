@@ -1936,7 +1936,7 @@ fn render_settings(b: &mut Buffer, settings: &Settings, p: &Palette) -> Option<O
             content,
             "notification popups",
             "choose where background popup notifications should appear",
-            &["off", "inside herder-tui", "via terminal", "via system"],
+            &["off", "inside herdr-tui", "via terminal", "via system"],
             settings.selected,
             p,
             &mut choice_hits,

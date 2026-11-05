@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix="tui-app-") as scratch:
                XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                HERDR_APP_HOME=str(root / "app"), HC_SESSION="tui-app-fixtures",
                WAYLAND_DISPLAY=display, DISPLAY="", HERDR_APP_NO_SOUND="1",
-               HERDER_TUI_DISABLE_SOUND="1", TUI_APP_TEST_ROOT=scratch)
+               HERDR_TUI_DISABLE_SOUND="1", TUI_APP_TEST_ROOT=scratch)
     children = []
 
     def run(argv):

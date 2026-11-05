@@ -12,14 +12,14 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 finish = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 2; printf '\\033]7501;state=idle:app=codex\\033\\\\'; sleep 180"
 block = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 2; printf '\\033]7501;state=blocked:app=codex\\033\\\\'; sleep 180"
 
 
 def run(name, toast, env, script, steps):
     core = Core(name, env)
-    config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.toml"
+    config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui" / "config.toml"
     config.parent.mkdir(parents=True)
     config.write_text("[ui.sound]\nenabled = false\n\n[ui.toast]\n" + toast)
     process = master = slave = None
@@ -92,7 +92,7 @@ try:
         text = notified.read_text()
         assert "codex needs attention" in text and "Notify · 1 · work" in text, text
 
-    run("notify-system", 'delivery = "system"\n', {"HERDER_TUI_NOTIFY_SEND": str(fake), "DISPLAY": ":99"}, block, system_steps)
+    run("notify-system", 'delivery = "system"\n', {"HERDR_TUI_NOTIFY_SEND": str(fake), "DISPLAY": ":99"}, block, system_steps)
 
     notified.unlink()
 
@@ -104,7 +104,7 @@ try:
         read_for(5)
         assert not notified.exists(), notified.read_text()
 
-    run("notify-delay", 'delivery = "system"\ndelay_seconds = 4\n', {"HERDER_TUI_NOTIFY_SEND": str(fake), "DISPLAY": ":99"}, block, answered_steps)
+    run("notify-delay", 'delivery = "system"\ndelay_seconds = 4\n', {"HERDR_TUI_NOTIFY_SEND": str(fake), "DISPLAY": ":99"}, block, answered_steps)
 finally:
     fake.unlink(missing_ok=True)
     notified.unlink(missing_ok=True)

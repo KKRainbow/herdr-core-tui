@@ -13,12 +13,12 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 for prompt in (False, True):
     core = Core("new-directory", {"SHELL": "/bin/sh", "PS1": "READY> "})
     process = master = slave = None
     try:
-        config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.toml"
+        config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text(f'[ui]\nprompt_new_workspace_name = {str(prompt).lower()}\n[terminal]\ndefault_shell = "/bin/sh"\n')
         first_folder = core.root / "first"

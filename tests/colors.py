@@ -16,7 +16,7 @@ import time
 from fixture import Core
 
 binary = pathlib.Path(os.environ.get(
-    "TUI_TEST_BINARY", pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+    "TUI_TEST_BINARY", pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 )).resolve()
 core = Core("colors")
 core.env.pop("NO_COLOR", None)

@@ -1,7 +1,7 @@
 """Core-managed remote machine loss, offline edits, and resumed views."""
 import fcntl,json,os,pathlib,pty,select,shlex,signal,struct,subprocess,termios,threading,time
 from fixture import Core
-binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herder-tui")).resolve()
+binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herdr-tui")).resolve()
 local=Core("local");remote=Core("remote");process=None;master=slave=None;stop=threading.Event()
 try:
  via=local.root/"remote-command";blocked=local.root/"blocked";pidfile=local.root/"transport.pid"

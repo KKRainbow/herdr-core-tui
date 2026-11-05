@@ -12,10 +12,10 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("attention")
 instance = "attention"
-state = pathlib.Path(core.env["XDG_STATE_HOME"]) / "herder-tui" / ("attention-" + f"{core.env['HC_SESSION']}:{instance}".encode().hex() + ".json")
+state = pathlib.Path(core.env["XDG_STATE_HOME"]) / "herdr-tui" / ("attention-" + f"{core.env['HC_SESSION']}:{instance}".encode().hex() + ".json")
 report = "printf '\\033]7501;state=working:app=codex\\033\\\\'; sleep 3; printf '\\033]7501;state=idle:app=codex\\033\\\\'; sleep 180"
 process = master = slave = None
 try:

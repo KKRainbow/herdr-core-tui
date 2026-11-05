@@ -301,7 +301,7 @@ fn base(variable: &str, fallback: &str) -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into())).join(fallback)
         })
-        .join("herder-tui")
+        .join("herdr-tui")
 }
 /// This client's `config.toml`, in Herdr's format.
 pub fn config_path() -> PathBuf {

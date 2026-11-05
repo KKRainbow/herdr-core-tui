@@ -13,7 +13,7 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("worktree-create")
 repo = core.root / core.root.name
 repo.mkdir()

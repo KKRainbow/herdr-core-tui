@@ -12,7 +12,7 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 for session, inherited, flags in (
     ("default", None, []),
     ("discovery", " discovery ", []),

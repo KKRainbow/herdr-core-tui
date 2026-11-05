@@ -1,4 +1,4 @@
-# herder-tui
+# herdr-tui
 
 An independent terminal client for Herdr Core.
 Shared terminals and workspace layouts remain compatible with herdr-app.
@@ -14,7 +14,7 @@ Run `just check` and `just build`.
 
 ## Run
 
-Run `target/debug/herder-tui` for the workspace interface on the same core as `hc`.
+Run `target/debug/herdr-tui` for the workspace interface on the same core as `hc`.
 The session defaults to `HC_SESSION`, or `default` when that variable is unset or empty.
 Use `--session SESSION` to select another core session and `--instance NAME` to name the viewer.
 The instance name is optional for interactive use and required for live control.
@@ -109,7 +109,7 @@ Worktree removal revalidates the checkout before it deletes it.
 
 ## Configuration
 
-Settings use Herdr's `config.toml` format in `$XDG_CONFIG_HOME/herder-tui/config.toml`, or `~/.config/herder-tui/config.toml`.
+Settings use Herdr's `config.toml` format in `$XDG_CONFIG_HOME/herdr-tui/config.toml`, or `~/.config/herdr-tui/config.toml`.
 Without that file, the TUI reads Herdr's `config.toml` (`HERDR_CONFIG_PATH`, else `~/.config/herdr/config.toml`).
 The first change made in settings copies Herdr's file to the TUI's path; Herdr's file stays unchanged.
 Sections Herdr has and the TUI does not use are ignored.
@@ -125,10 +125,10 @@ Set `[ui.toast] delivery` to `herdr` for a card inside the TUI, `terminal` for a
 `delay_seconds` waits before delivering and drops a finish you saw or a request already answered; `[ui.toast.herdr] position` places the card.
 prefix+o opens the card's agent.
 Sounds play through `paplay`, `pw-play`, `ffplay`, `mpg123`, or `mpv` on Linux and `afplay` on macOS.
-Set `HERDER_TUI_DISABLE_SOUND` to silence them for a session.
+Set `HERDR_TUI_DISABLE_SOUND` to silence them for a session.
 Omitted settings use Herdr's defaults.
 Use the menu's reload config to apply changes.
-View state and sidebar layout use the matching XDG state directory under `herder-tui`.
+View state and sidebar layout use the matching XDG state directory under `herdr-tui`.
 The TUI does not write the app's private view or preferences.
 
 ## Terminal support
@@ -162,15 +162,15 @@ See [validation](docs/validation.md), [performance](docs/performance.md), and [p
 
 ## CLI and packaging
 
-Run `herder-tui --session SESSION do help` for shared command names and arguments.
+Run `herdr-tui --session SESSION do help` for shared command names and arguments.
 Pass arguments as one JSON object.
 Structural commands work while no TUI is open and require explicit target IDs.
-For example, `herder-tui --session work do tab.rename '{"id":"tb123","name":"Tests"}'` changes the shared tab.
+For example, `herdr-tui --session work do tab.rename '{"id":"tb123","name":"Tests"}'` changes the shared tab.
 A close command first returns its affected terminals; submit again with `confirm: true` only when you intend to end them.
 Keep the returned review in `expected` to reject changed confirmation targets.
 
-Run `herder-tui --session SESSION instances` to list live viewers.
-Run `herder-tui --session SESSION --instance NAME view state` to inspect one viewer.
+Run `herdr-tui --session SESSION instances` to list live viewers.
+Run `herdr-tui --session SESSION --instance NAME view state` to inspect one viewer.
 Live view commands include `pane.focus`, `tab.focus`, `space.focus`, `terminal.focus`, `agent.focus`, `zoom`, `machine`, and `quit`.
 Pane, tab, and space focus take an `id`; terminal and agent focus take a `terminal` address.
 The control socket is private to the current user and disappears when the viewer exits.
@@ -179,7 +179,7 @@ Use `hc` for terminal automation and machine management.
 
 Run `just install /chosen/prefix` to build an optimized binary and install it under that prefix's `bin` directory.
 This does not replace the installed app or core.
-Run `just package /path/herder-tui-source.tar.gz` to export the staged source tree with pinned Ghostty and library sources.
+Run `just package /path/herdr-tui-source.tar.gz` to export the staged source tree with pinned Ghostty and library sources.
 The source bundle needs no sibling checkout and already includes its submodules.
 Run `just package-check` to export the staged source, verify its library path, and build and test it in a temporary directory.
 `distribution/client-revision` selects the library revision; `SOURCE-REVISIONS` records the bundle inputs.

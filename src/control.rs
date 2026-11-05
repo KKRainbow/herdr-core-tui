@@ -30,11 +30,11 @@ pub fn directory() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             std::env::temp_dir().join(format!(
-                "herder-{:x}",
+                "herdr-{:x}",
                 hash(&std::env::var("HOME").unwrap_or_default())
             ))
         })
-        .join("herder-tui")
+        .join("herdr-tui")
 }
 fn prefix(session: &str) -> String {
     format!("{:x}-", hash(session))
@@ -60,7 +60,7 @@ fn path(session: &str, instance: &str) -> Result<PathBuf> {
 fn path(session: &str, instance: &str) -> Result<PathBuf> {
     check_instance(instance)?;
     Ok(PathBuf::from(format!(
-        r"\\.\pipe\herder-tui-{}{instance}",
+        r"\\.\pipe\herdr-tui-{}{instance}",
         prefix(session)
     )))
 }
@@ -243,7 +243,7 @@ fn listing(session: &str) -> (PathBuf, String, &'static str) {
 fn listing(session: &str) -> (PathBuf, String, &'static str) {
     (
         PathBuf::from(r"\\.\pipe\"),
-        format!("herder-tui-{}", prefix(session)),
+        format!("herdr-tui-{}", prefix(session)),
         "",
     )
 }

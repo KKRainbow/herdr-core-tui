@@ -13,9 +13,9 @@ import tomllib
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("settings")
-config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.toml"
+config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui" / "config.toml"
 config.parent.mkdir(parents=True)
 config.write_text('# my keys\n[keys]\nnext_agent = "alt+a"\n')
 process = master = slave = None

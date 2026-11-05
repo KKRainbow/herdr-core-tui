@@ -116,9 +116,9 @@ pub fn show_desktop_notification(title: &str, body: Option<&str>) -> io::Result<
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return Ok(false);
         }
-        let program = std::env::var_os("HERDER_TUI_NOTIFY_SEND").unwrap_or("notify-send".into());
+        let program = std::env::var_os("HERDR_TUI_NOTIFY_SEND").unwrap_or("notify-send".into());
         let mut cmd = Command::new(program);
-        cmd.arg("--app-name").arg("herder-tui").arg("--").arg(title);
+        cmd.arg("--app-name").arg("herdr-tui").arg("--").arg(title);
         if let Some(body) = body.filter(|body| !body.is_empty()) {
             cmd.arg(body);
         }

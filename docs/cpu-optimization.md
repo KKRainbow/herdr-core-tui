@@ -110,5 +110,5 @@ These synthetic fixtures measure TUI CPU, not a live Codex session or total core
 [Raw samples](cpu-optimization.json) include elapsed time, redraws, parsed bytes, RPC latency, and binary hashes.
 The largest confirmed gains came from retained rows and event-specific invalidation.
 The smaller library changes reduce known work, but their individual CPU gains were not consistently measurable.
-The release binary is `target/release/herder-tui`.
+The release binary is `target/release/herdr-tui`.
 Existing running processes do not pick up the changes until restarted with the new binary.

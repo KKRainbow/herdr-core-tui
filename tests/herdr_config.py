@@ -13,13 +13,13 @@ import tomllib
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("herdr-config")
 herdr = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr" / "config.toml"
 herdr.parent.mkdir(parents=True)
 original = '# from herdr\n[keys]\nsettings = "prefix+y"\n\n[ui.sound]\nenabled = true\n'
 herdr.write_text(original)
-own = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui" / "config.toml"
+own = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui" / "config.toml"
 process = master = slave = None
 try:
     subprocess.check_output([str(binary), "do", "space.new", json.dumps({"argv": ["sh", "-c", "sleep 180"]})], env=core.env, timeout=20)

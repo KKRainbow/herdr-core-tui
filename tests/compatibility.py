@@ -1,7 +1,7 @@
 """Preserve future app content when completed terminal panes close."""
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,termios,threading,time
 from fixture import Core
-binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herder-tui")).resolve()
+binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herdr-tui")).resolve()
 core=Core("compatibility");process=None;master=slave=None;stop=threading.Event()
 def cli(*args):return json.loads(subprocess.check_output([str(binary),"--session",core.env["HC_SESSION"],*args],env=core.env,timeout=10))
 try:

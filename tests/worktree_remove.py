@@ -12,12 +12,12 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("worktree-remove")
 repo = core.root / "repo"
 repo.mkdir()
 trees = core.root / "trees"
-config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui"
+config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui"
 config.mkdir(parents=True)
 (config / "config.toml").write_text(f'[worktrees]\ndirectory = {json.dumps(str(trees))}\n\n[keys]\nremove_worktree = "prefix+y"\n')
 process = master = slave = None

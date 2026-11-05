@@ -18,8 +18,8 @@ def extract(path,revision,destination):
     destination.mkdir(parents=True,exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(git(path,"archive",revision)))as archive:
         archive.extractall(destination,filter="data")
-with tempfile.TemporaryDirectory(prefix="herder-source-")as scratch:
-    root=pathlib.Path(scratch)/"herder-tui"
+with tempfile.TemporaryDirectory(prefix="herdr-source-")as scratch:
+    root=pathlib.Path(scratch)/"herdr-tui"
     # The staged index permits checking packaging before the milestone commit.
     tree=git(repo,"write-tree").decode().strip()
     extract(repo,tree,root)
@@ -34,5 +34,5 @@ with tempfile.TemporaryDirectory(prefix="herder-source-")as scratch:
     (root/"SOURCE-REVISIONS").write_text(f"tui-tree {tree}\nclient {pin}\nghostty {ghostty}\n")
     args.output.parent.mkdir(parents=True,exist_ok=True)
     with tarfile.open(args.output,"w:gz")as archive:
-        archive.add(root,arcname="herder-tui")
+        archive.add(root,arcname="herdr-tui")
 print(args.output.resolve())

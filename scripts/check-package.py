@@ -6,12 +6,12 @@ import subprocess
 import tempfile
 
 repo = pathlib.Path(__file__).resolve().parents[1]
-with tempfile.TemporaryDirectory(prefix="herder-package-check-") as scratch:
+with tempfile.TemporaryDirectory(prefix="herdr-package-check-") as scratch:
     scratch = pathlib.Path(scratch)
     bundle = scratch / "source.tar.gz"
     subprocess.run(["python3", str(repo / "scripts/package.py"), str(bundle)], check=True)
     subprocess.run(["tar", "-xzf", str(bundle), "-C", str(scratch)], check=True)
-    source = scratch / "herder-tui"
+    source = scratch / "herdr-tui"
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"], cwd=source
     ))

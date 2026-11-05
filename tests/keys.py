@@ -12,14 +12,14 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("keys")
 result = core.root / "scrollback.txt"
 editor = core.root / "editor.sh"
 editor.write_text(f"#!/bin/sh\ncp \"$1\" {result}\n")
 editor.chmod(0o700)
 core.env["EDITOR"] = str(editor)
-config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herder-tui"
+config = pathlib.Path(core.env["XDG_CONFIG_HOME"]) / "herdr-tui"
 config.mkdir(parents=True)
 shell_result = core.root / "shell-command.txt"
 (config / "config.toml").write_text(f"""

@@ -47,7 +47,7 @@ release:
     cargo build --release --locked
 
 install prefix: release
-    install -Dm755 target/release/herder-tui {{quote(prefix)}}/bin/herder-tui
+    install -Dm755 target/release/herdr-tui {{quote(prefix)}}/bin/herdr-tui
 
 cli-integration: build
     python3 tests/cli.py

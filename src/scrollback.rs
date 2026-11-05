@@ -41,7 +41,7 @@ fn unique_path(attempt: u32) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!(
-        "herder-tui-scrollback-{}-{nanos}-{attempt}.txt",
+        "herdr-tui-scrollback-{}-{nanos}-{attempt}.txt",
         std::process::id()
     ))
 }

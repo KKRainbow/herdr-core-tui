@@ -11,8 +11,8 @@ import tempfile
 import termios
 import time
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
-with tempfile.TemporaryDirectory(prefix="herder-tui-test-") as root:
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
+with tempfile.TemporaryDirectory(prefix="herdr-tui-test-") as root:
     env = dict({k:v for k,v in os.environ.items() if k not in ("WAYLAND_DISPLAY","DISPLAY")}, HC_SESSION="tui-smoke", XDG_RUNTIME_DIR=root + "/runtime",
                XDG_CONFIG_HOME=root + "/config", XDG_STATE_HOME=root + "/state",
                HERDR_APP_HOME=root + "/app", TERM="xterm-256color")

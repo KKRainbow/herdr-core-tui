@@ -13,7 +13,7 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 with tempfile.TemporaryDirectory(prefix="tui-slow-git-") as root:
     root = pathlib.Path(root)
     log = root / "queries"

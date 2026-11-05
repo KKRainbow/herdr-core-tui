@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DISABLE_ENV: &str = "HERDER_TUI_DISABLE_SOUND";
+const DISABLE_ENV: &str = "HERDR_TUI_DISABLE_SOUND";
 const PLAYER_TIMEOUT: Duration = Duration::from_secs(15);
 static DONE: &[u8] = include_bytes!("../assets/sounds/done.mp3");
 static REQUEST: &[u8] = include_bytes!("../assets/sounds/request.mp3");
@@ -48,7 +48,7 @@ pub fn play(sound: Sound, custom: Option<PathBuf>) {
             Sound::Request => REQUEST,
         };
         let path = std::env::temp_dir().join(format!(
-            "herder-tui-sound-{}-{}.mp3",
+            "herdr-tui-sound-{}-{}.mp3",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

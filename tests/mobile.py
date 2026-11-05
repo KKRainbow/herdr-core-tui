@@ -12,7 +12,7 @@ import time
 
 from fixture import Core
 
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 core = Core("mobile")
 block = "printf '\\033]7501;state=blocked:app=codex\\033\\\\'; sleep 180"
 process = master = slave = None

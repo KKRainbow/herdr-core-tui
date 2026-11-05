@@ -104,7 +104,7 @@ impl Drop for Host {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("herder-tui: {error}");
+        eprintln!("herdr-tui: {error}");
         std::process::exit(1);
     }
 }
@@ -115,7 +115,7 @@ async fn run() -> Result<()> {
         return Ok(());
     }
     if args == ["--version"] {
-        println!("herder-tui {}", env!("CARGO_PKG_VERSION"));
+        println!("herdr-tui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let options = cli::parse(args)?;

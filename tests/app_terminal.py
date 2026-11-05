@@ -16,7 +16,7 @@ env = dict(os.environ, HERDR_APP_HOME=root + "/app", XDG_RUNTIME_DIR=root + "/ru
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 original = termios.tcgetattr(slave)
-binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 process = subprocess.Popen([str(binary), "--session", env["HC_SESSION"], address],env=env,stdin=slave,stdout=slave,stderr=slave)
 try:
     output=b""

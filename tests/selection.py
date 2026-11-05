@@ -17,7 +17,7 @@ import time
 from fixture import Core
 
 binary = pathlib.Path(os.environ.get(
-    "TUI_TEST_BINARY", pathlib.Path(__file__).resolve().parents[1] / "target/debug/herder-tui"
+    "TUI_TEST_BINARY", pathlib.Path(__file__).resolve().parents[1] / "target/debug/herdr-tui"
 )).resolve()
 tools = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / f"tui-clip-{os.getpid()}"
 tools.mkdir()

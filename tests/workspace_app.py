@@ -2,13 +2,13 @@
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,termios,time
 root=os.environ["TUI_APP_TEST_ROOT"]
 assert root.startswith("/tmp/")
-env=dict(os.environ,HERDER_TUI_DISABLE_SOUND="1",HERDR_APP_HOME=root+"/app",XDG_RUNTIME_DIR=root+"/runtime",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",TERM="xterm-256color")
+env=dict(os.environ,HERDR_TUI_DISABLE_SOUND="1",HERDR_APP_HOME=root+"/app",XDG_RUNTIME_DIR=root+"/runtime",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",TERM="xterm-256color")
 def app():return json.loads(subprocess.check_output(["herdr-app","ls"],env=env))
 def active():return [(s["id"],t["id"])for s in app()["spaces"]for t in s["tabs"]if t["active"]]
 before=active()
 name="TUI test "+str(time.time_ns())
 master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",32,120,0,0));original=termios.tcgetattr(slave)
-binary=pathlib.Path(__file__).resolve().parents[1]/"target/debug/herder-tui"
+binary=pathlib.Path(__file__).resolve().parents[1]/"target/debug/herdr-tui"
 p=subprocess.Popen([str(binary),"--session",env["HC_SESSION"]],env=env,stdin=slave,stdout=slave,stderr=slave)
 def drain(seconds=.3):
  data=b"";end=time.monotonic()+seconds

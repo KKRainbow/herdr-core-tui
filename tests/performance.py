@@ -1,7 +1,7 @@
 """Measure TUI-only CPU, RSS, redraws, parsing, and RPC responsiveness."""
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,termios,threading,time
 from fixture import Core
-binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herder-tui")).resolve()
+binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/release/herdr-tui")).resolve()
 mode=os.environ.get("TUI_PERF_MODE","scroll");assert mode in ("scroll","repaint","metadata")
 seconds=float(os.environ.get("TUI_PERF_SECONDS","5"));results=[]
 for count in ([int(os.environ["TUI_PERF_PANES"])] if "TUI_PERF_PANES" in os.environ else (1,15)):

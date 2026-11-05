@@ -246,7 +246,7 @@ impl Workspace {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or_default();
-        let name = format!("herder-tui-image-{stamp}.{}", image.extension);
+        let name = format!("herdr-tui-image-{stamp}.{}", image.extension);
         let put = self
             .session
             .client
@@ -1295,7 +1295,7 @@ impl Workspace {
                 }
             }
             CommandKind::PluginAction => {
-                self.toast("plugin actions are not supported by herder-tui", true);
+                self.toast("plugin actions are not supported by herdr-tui", true);
             }
         }
     }

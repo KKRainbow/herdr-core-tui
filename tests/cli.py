@@ -1,6 +1,6 @@
 """Standalone commands and unambiguous live-view targeting."""
 import fcntl,json,os,pathlib,pty,select,struct,subprocess,tempfile,termios,time
-binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/debug/herder-tui")).resolve()
+binary=pathlib.Path(os.environ.get("TUI_TEST_BINARY",pathlib.Path(__file__).resolve().parents[1]/"target/debug/herdr-tui")).resolve()
 with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
  env=dict({k:v for k,v in os.environ.items() if k not in ("WAYLAND_DISPLAY","DISPLAY")},HC_SESSION="tui-cli",XDG_RUNTIME_DIR=root+"/run",XDG_STATE_HOME=root+"/state",XDG_CONFIG_HOME=root+"/config",HERDR_APP_HOME=root+"/app",TERM="xterm-256color")
  pathlib.Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix="tui-cli-")as root:
   for name,process,master,slave,original in viewers:
    if name=="two":
     # Force a handled state-save error after terminal setup.
-    view_path=pathlib.Path(root)/"state/herder-tui"/("view-"+(env["HC_SESSION"]+":two").encode().hex()+".json")
+    view_path=pathlib.Path(root)/"state/herdr-tui"/("view-"+(env["HC_SESSION"]+":two").encode().hex()+".json")
     view_path.mkdir(parents=True)
    assert cli("--instance",name,"view","quit")["ok"]
    assert process.wait(timeout=5)==(1 if name=="two" else 0)

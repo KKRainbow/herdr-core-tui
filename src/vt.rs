@@ -36,6 +36,20 @@ pub struct Frame {
     pub cursor: Option<(u16, u16)>,
     pub bg: Rgb,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextMatch {
+    /// Inclusive endpoints in (column, screen row) coordinates.
+    pub start: (u16, u64),
+    pub end: (u16, u64),
+}
+
+struct Search(GhosttySearch);
+impl Drop for Search {
+    fn drop(&mut self) {
+        unsafe { ghostty_search_free(self.0) };
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placement {
     pub image: u32,
@@ -220,6 +234,7 @@ pub struct Vt {
     callbacks: Box<Callbacks>,
     /// A requested local clear waiting for the stream to reach ground.
     clear_pending: bool,
+    revision: u64,
     cached_rows: Vec<Arc<Vec<Cell>>>,
     cached_colors: Option<(Rgb, Rgb, u16, u16)>,
     default_colors: GhosttyRenderStateColors,
@@ -250,6 +265,7 @@ impl Vt {
                     size_report: None,
                 }),
                 clear_pending: false,
+                revision: 0,
                 cached_rows: Vec::new(),
                 cached_colors: None,
                 default_colors: GhosttyRenderStateColors {
@@ -543,6 +559,9 @@ impl Vt {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.revision += 1;
+        }
         let mut bytes = bytes;
         if self.clear_pending {
             let mut consumed = 0;
@@ -584,6 +603,7 @@ impl Vt {
         true
     }
     fn clear_at_ground(&mut self) {
+        self.revision += 1;
         self.clear_pending = false;
         let row = self.data::<u16>(GHOSTTY_TERMINAL_DATA_CURSOR_Y);
         let col = self.data::<u16>(GHOSTTY_TERMINAL_DATA_CURSOR_X);
@@ -598,11 +618,14 @@ impl Vt {
     }
     /// Plain text of history and screen, soft wraps joined, as Herdr hands to `$EDITOR`.
     pub fn text(&self) -> String {
-        self.format(std::ptr::null())
+        self.format(std::ptr::null(), true)
     }
     /// The first visible row's position in history and screen rows (Ghostty's screen coordinates).
     pub fn top_row(&self) -> u64 {
         self.scroll_position().0
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     /// Plain text between two inclusive `(column, screen row)` points in either order,
     /// as Herdr's `format_selection` reads a selection across history.
@@ -632,16 +655,89 @@ impl Vt {
             end,
             rectangle: false,
         };
-        self.format(&selection)
+        self.format(&selection, true)
     }
-    fn format(&self, selection: *const GhosttySelection) -> String {
+    /// Search history without moving the viewport. Results are in terminal order.
+    pub fn search(&self, query: &str) -> Vec<TextMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        unsafe {
+            let mut search = Search(std::ptr::null_mut());
+            ok(
+                ghostty_search_new(std::ptr::null(), &mut search.0, self.term),
+                "search",
+            );
+            let needle = GhosttyString {
+                ptr: query.as_ptr(),
+                len: query.len(),
+            };
+            ok(
+                ghostty_search_set(
+                    search.0,
+                    GHOSTTY_SEARCH_OPT_NEEDLE,
+                    &needle as *const _ as *const c_void,
+                ),
+                "search query",
+            );
+            ok(ghostty_search_run(search.0), "search history");
+            let mut total = 0usize;
+            ok(
+                ghostty_search_get(
+                    search.0,
+                    GHOSTTY_SEARCH_DATA_TOTAL_MATCHES,
+                    &mut total as *mut _ as *mut c_void,
+                ),
+                "search count",
+            );
+            let mut selections = vec![GhosttySelection::default(); total];
+            let mut matches = GhosttySelectionBuffer {
+                ptr: selections.as_mut_ptr(),
+                cap: selections.len(),
+                len: 0,
+            };
+            ok(
+                ghostty_search_get(
+                    search.0,
+                    GHOSTTY_SEARCH_DATA_MATCHES,
+                    &mut matches as *mut _ as *mut c_void,
+                ),
+                "search matches",
+            );
+            let point = |reference: &GhosttyGridRef| {
+                let mut point = GhosttyPointCoordinate::default();
+                ok(
+                    ghostty_terminal_point_from_grid_ref(
+                        self.term,
+                        reference,
+                        GHOSTTY_POINT_TAG_SCREEN,
+                        &mut point,
+                    ),
+                    "search point",
+                );
+                (point.x, u64::from(point.y))
+            };
+            let case_sensitive = query.chars().any(char::is_uppercase);
+            selections[..matches.len]
+                .iter()
+                .rev()
+                // Ghostty folds ASCII case; Herdr's uppercase queries are exact.
+                .filter(|selection| !case_sensitive || self.format(*selection, false) == query)
+                .map(|selection| TextMatch {
+                    start: point(&selection.start),
+                    end: point(&selection.end),
+                })
+                .collect()
+        }
+    }
+    fn format(&self, selection: *const GhosttySelection, trim: bool) -> String {
         unsafe {
             let mut formatter: GhosttyFormatter = std::ptr::null_mut();
             let options = GhosttyFormatterTerminalOptions {
                 size: std::mem::size_of::<GhosttyFormatterTerminalOptions>(),
                 emit: GHOSTTY_FORMATTER_FORMAT_PLAIN,
                 unwrap: true,
-                trim: true,
+                trim,
                 extra: GhosttyFormatterTerminalExtra {
                     size: std::mem::size_of::<GhosttyFormatterTerminalExtra>(),
                     screen: GhosttyFormatterScreenExtra {
@@ -679,6 +775,9 @@ impl Vt {
         }
     }
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        if (self.cols, self.rows) != (cols.max(1), rows.max(1)) {
+            self.revision += 1;
+        }
         self.cols = cols.max(1);
         self.rows = rows.max(1);
         unsafe { ghostty_terminal_resize(self.term, self.cols, self.rows, 1, 2) };

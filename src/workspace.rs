@@ -116,6 +116,7 @@ struct Toast {
 /// A copy-mode search being typed in the mode bar.
 struct CopySearch {
     query: crate::editor::TextEditor,
+    backward: bool,
 }
 pub struct Workspace {
     view_key: String,

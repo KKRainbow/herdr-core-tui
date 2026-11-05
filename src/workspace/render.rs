@@ -167,12 +167,20 @@ impl Workspace {
         let surface = self.active_id().and_then(|id| self.surfaces.get(&id))?;
         let copy = surface.copy.as_ref();
         Some(CopyBar {
-            search_prompt: self
+            search_prompt: self.copy_search.as_ref().map(|search| {
+                search
+                    .query
+                    .viewport(chrome::copy_search_width(self.layout.pane_surface.width))
+                    .0
+                    .to_owned()
+            }),
+            search_backward: self
                 .copy_search
                 .as_ref()
-                .map(|search| search.query.as_str().to_owned()),
+                .map_or_else(|| copy.is_some_and(|c| c.search_backward), |s| s.backward),
             query: copy.map(|c| c.query.clone()).unwrap_or_default(),
-            matched: copy.is_some_and(|c| !c.query.is_empty() && c.selecting),
+            matches: copy.map_or(0, |c| c.matches.len()),
+            current_match: copy.and_then(|c| c.current_match),
             selecting: copy.is_some_and(|c| c.selecting),
         })
     }
@@ -333,8 +341,8 @@ impl Workspace {
                 cursor = None;
             }
             if let Some(search) = &self.copy_search {
-                let (_, offset) = search.query.viewport(bar.width.saturating_sub(8));
-                cursor = Some((bar.x + 8 + offset, bar.y));
+                let (_, offset) = search.query.viewport(chrome::copy_search_width(bar.width));
+                cursor = (bar.width > 8).then_some((bar.x + 8 + offset, bar.y));
             }
         }
         if self.mobile_switcher_open() {

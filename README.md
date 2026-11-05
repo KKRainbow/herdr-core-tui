@@ -95,7 +95,15 @@ Ctrl+click opens an HTTP or HTTPS link with `xdg-open` on Linux.
 The mouse wheel scrolls history when the program does not use mouse reporting.
 
 In copy mode, use h/j/k/l and w/b/e to move, v or Space to select, and y or Enter to copy.
-Use PageUp and PageDown for history, / to search retained history, n to repeat, and q or Esc to leave.
+Use PageUp/PageDown or Ctrl+B/F for whole pages and Ctrl+U/D for half pages;
+g/G jumps to the start/end of history.
+In copy mode, Ctrl+B pages up instead of opening the prefix menu.
+Use / to search forward through retained history and ? to search backward.
+Lowercase queries ignore ASCII case; a query containing uppercase is case-sensitive.
+Search follows Ghostty's text extraction, which omits trailing terminal padding.
+Matches are highlighted with a current/total count; n repeats in the search direction and N reverses it.
+With no explicit selection, y or Enter copies the current match.
+Esc cancels the search prompt, clears the search and selection, or exits when both are clear; q exits directly.
 Copies go through `wl-copy`, `xclip`, `xsel`, or `pbcopy`, else OSC 52; over SSH, in VS Code, or in WSL, OSC 52 comes first.
 Programs inside a pane can also copy text to the host clipboard with OSC 52.
 In a terminal on another machine, ctrl+v (`remote_image_paste`) or an empty paste sends the clipboard image there, and a pasted image file path sends that file; its path is pasted in.

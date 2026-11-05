@@ -200,7 +200,7 @@ impl Workspace {
                 return Ok(false);
             }
             Mode::Copy => {
-                if self.keys.is_prefix(&key) {
+                if self.keys.is_prefix(&key) && crate::copy::page_key(key).is_none() {
                     self.mode = Mode::Prefix;
                 } else {
                     self.copy_key(key)?;
@@ -1996,24 +1996,18 @@ impl Workspace {
         match key.code {
             KeyCode::Esc => self.copy_search = None,
             KeyCode::Enter => {
-                let query = self
-                    .copy_search
-                    .take()
-                    .map(|s| s.query.as_str().to_owned())
-                    .unwrap_or_default();
+                let Some(search) = self.copy_search.take() else {
+                    return;
+                };
+                if search.query.is_empty() {
+                    return;
+                }
                 if let Some(id) = self.active_id()
                     && let Some(surface) = self.surfaces.get_mut(&id)
+                    && let Some(copy) = &mut surface.copy
+                    && !copy.search(&mut surface.vt, search.query.as_str(), search.backward)
                 {
-                    match crate::copy::search_history(&mut surface.vt, &query) {
-                        Some(found) => surface.copy = Some(found),
-                        None => {
-                            if let Some(copy) = &mut surface.copy {
-                                copy.query = query;
-                                copy.selecting = false;
-                            }
-                            self.toast("no match in retained history", true);
-                        }
-                    }
+                    self.toast("no match in retained history", true);
                 }
             }
             _ => {
@@ -2037,6 +2031,13 @@ impl Workspace {
             self.mode = Mode::Terminal;
             return Ok(());
         };
+        if let Some((backward, half)) = crate::copy::page_key(key) {
+            copy.page(&mut surface.vt, backward, half);
+            return Ok(());
+        }
+        if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+            return Ok(());
+        }
         let max_y = copy.frame.rows.len().saturating_sub(1) as u16;
         let max_x = copy
             .frame
@@ -2053,7 +2054,7 @@ impl Workspace {
         match key.code {
             KeyCode::Esc if copy.selecting || !copy.query.is_empty() => {
                 copy.selecting = false;
-                copy.query.clear();
+                copy.clear_search();
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 surface.copy = None;
@@ -2064,11 +2065,11 @@ impl Workspace {
             // Past the frame's edge, history scrolls under the cursor.
             KeyCode::Up | KeyCode::Char('k') if copy.cursor.1 == 0 => {
                 surface.vt.scroll_viewport(-1);
-                copy.rebase(surface.vt.frame(), surface.vt.top_row());
+                copy.rebase(&mut surface.vt);
             }
             KeyCode::Down | KeyCode::Char('j') if copy.cursor.1 == max_y => {
                 surface.vt.scroll_viewport(1);
-                copy.rebase(surface.vt.frame(), surface.vt.top_row());
+                copy.rebase(&mut surface.vt);
             }
             KeyCode::Up | KeyCode::Char('k') => copy.cursor.1 = copy.cursor.1.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => copy.cursor.1 = (copy.cursor.1 + 1).min(max_y),
@@ -2097,40 +2098,29 @@ impl Workspace {
                 }
                 copy.cursor.0 = x as u16;
             }
-            KeyCode::Char('g') => copy.cursor = (0, 0),
-            KeyCode::Char('G') => copy.cursor.1 = max_y,
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                copy.history(&mut surface.vt, key.code == KeyCode::Char('g'));
+            }
             KeyCode::Char(' ') | KeyCode::Char('v') => {
                 copy.anchor_here();
                 copy.selecting = !copy.selecting;
             }
-            KeyCode::Char('y') | KeyCode::Enter => {
-                if copy.selecting {
-                    clipboard(&copy.text(&surface.vt))?;
-                    surface.copy = None;
-                    self.mode = Mode::Terminal;
-                    self.toast("copied to clipboard", false);
-                }
+            KeyCode::Char('y') | KeyCode::Enter
+                if copy.selecting || copy.current_match.is_some() =>
+            {
+                clipboard(&copy.text(&surface.vt))?;
+                surface.copy = None;
+                self.mode = Mode::Terminal;
+                self.toast("copied to clipboard", false);
             }
-            KeyCode::Char('/') => {
+            KeyCode::Char('/') | KeyCode::Char('?') => {
                 self.copy_search = Some(CopySearch {
                     query: TextEditor::default(),
+                    backward: key.code == KeyCode::Char('?'),
                 });
             }
-            KeyCode::Char('n') => {
-                let query = copy.query.clone();
-                surface.vt.scroll_viewport(1);
-                if let Some(found) = crate::copy::search_history(&mut surface.vt, &query) {
-                    surface.copy = Some(found);
-                }
-            }
-            KeyCode::PageUp | KeyCode::PageDown => {
-                let delta = if key.code == KeyCode::PageUp {
-                    -(surface.vt.rows as isize)
-                } else {
-                    surface.vt.rows as isize
-                };
-                surface.vt.scroll_viewport(delta);
-                copy.rebase(surface.vt.frame(), surface.vt.top_row());
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                copy.repeat_search(&mut surface.vt, key.code == KeyCode::Char('N'));
             }
             _ => {}
         }
@@ -2686,7 +2676,7 @@ impl Workspace {
                     };
                     if scroll != 0 {
                         surface.vt.scroll_viewport(scroll);
-                        copy.rebase(surface.vt.frame(), surface.vt.top_row());
+                        copy.rebase(&mut surface.vt);
                     }
                     copy.cursor = (
                         x.clamp(content.x, content.right().saturating_sub(1)) - content.x,

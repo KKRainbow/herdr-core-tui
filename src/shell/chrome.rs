@@ -1595,6 +1595,17 @@ fn max_tab_scroll(widths: &[u16], available: u16) -> usize {
 
 // ---- mode bar -------------------------------------------------------------
 
+const COPY_SEARCH_FOOTER: &str = "  enter search  esc cancel";
+
+pub fn copy_search_width(width: u16) -> u16 {
+    let footer = if width >= 50 {
+        COPY_SEARCH_FOOTER.len() as u16
+    } else {
+        0
+    };
+    width.saturating_sub(8 + footer + 1)
+}
+
 /// Draws the bottom-row mode bar over the pane area; returns its row.
 pub fn render_mode_bar(
     buffer: &mut Buffer,
@@ -1675,9 +1686,14 @@ pub fn render_mode_bar(
                 if let Some(query) = &copy.search_prompt {
                     buffer.set_stringn(bar.x, bar.y, " COPY ", usize::from(bar.width), mode_style);
                     if bar.width >= 8 {
-                        buffer.set_string(bar.x + 7, bar.y, "/", key);
+                        buffer.set_string(
+                            bar.x + 7,
+                            bar.y,
+                            if copy.search_backward { "?" } else { "/" },
+                            key,
+                        );
                     }
-                    let footer = "  enter search  esc cancel";
+                    let footer = COPY_SEARCH_FOOTER;
                     let footer_width = if bar.width >= 50 {
                         footer.len() as u16
                     } else {
@@ -1704,10 +1720,12 @@ pub fn render_mode_bar(
                 };
                 let match_status = if copy.query.is_empty() {
                     String::new()
-                } else if copy.matched {
-                    " 1/1".into()
                 } else {
-                    " 0/0".into()
+                    format!(
+                        " {}/{}",
+                        copy.current_match.map_or(0, |index| index + 1),
+                        copy.matches
+                    )
                 };
                 let (exit_keys, exit_label) = if copy.query.is_empty() && !copy.selecting {
                     ("q/esc", " exit")
@@ -1716,13 +1734,15 @@ pub fn render_mode_bar(
                 };
                 segments.extend([
                     (text(" COPY "), mode_style),
-                    (text(" "), base),
+                    (format!("{match_status} "), base),
                     (text("h/j/k/l"), key),
                     (text(" move  "), base),
-                    (text("/"), key),
+                    (text("/?"), key),
                     (text(" search  "), base),
-                    (text("n"), key),
-                    (format!(" repeat{match_status}  "), base),
+                    (text("n/N"), key),
+                    (text(" repeat  "), base),
+                    (text("pgup/pgdn"), key),
+                    (text(" page  "), base),
                     (text("v/space"), key),
                     (format!(" {select}  "), base),
                     (text("y/enter"), key),
@@ -1750,6 +1770,47 @@ pub fn render_mode_bar(
 mod tests {
     use super::*;
     use crate::shell::snapshot::Worktree;
+
+    #[test]
+    fn copy_bar_reports_real_matches_and_search_direction() {
+        let area = Rect::new(0, 0, 120, 1);
+        let palette = Palette::default();
+        let mut copy = super::super::CopyBar {
+            search_prompt: None,
+            search_backward: false,
+            query: "hit".into(),
+            matches: 5,
+            current_match: Some(2),
+            selecting: false,
+        };
+        let render = |copy: &super::super::CopyBar| {
+            let mut buffer = Buffer::empty(area);
+            render_mode_bar(&mut buffer, area, Mode::Copy, Some(copy), None, &palette);
+            buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(render(&copy).contains("3/5"));
+        copy.matches = 0;
+        copy.current_match = None;
+        assert!(render(&copy).contains("0/0"));
+        copy.search_prompt = Some("needle".into());
+        copy.search_backward = true;
+        assert!(render(&copy).contains("?needle"));
+        for width in 1..10 {
+            let area = Rect::new(0, 0, width, 1);
+            render_mode_bar(
+                &mut Buffer::empty(area),
+                area,
+                Mode::Copy,
+                Some(&copy),
+                None,
+                &palette,
+            );
+        }
+    }
 
     fn workspace(id: &str, key: Option<(&str, bool)>, focused: bool) -> Workspace {
         Workspace {

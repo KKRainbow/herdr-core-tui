@@ -46,6 +46,13 @@ try:
 
     words = do("space.new", {"name": "Words", "argv": ["sh", "-c", "printf 'alpha beta-gamma delta\\n'; sleep 180"]})
     pages = do("tab.new", {"space": words["space"], "argv": ["sh", "-c", "i=1; while [ $i -le 60 ]; do echo page$i; i=$((i+1)); done; sleep 180"]})
+    search = do("tab.new", {
+        "space": words["space"],
+        "argv": [sys.executable, "-u", "-c",
+                 "import time; print('hit HIT'); "
+                 "[print(f'line{i}') for i in range(40)]; "
+                 "print('Hit'); time.sleep(180)"],
+    })
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
     process = subprocess.Popen([str(binary), "--instance", "selection"], env=local.env, stdin=slave, stdout=slave, stderr=slave)
@@ -97,6 +104,51 @@ try:
     lines = text.splitlines()
     assert len(lines) > 20 and lines[-1] == "page60", lines
 
+    # Page keys move both the viewport and the absolute cursor, retaining selection.
+    for keys, expected in [
+        (b"\x1b[6~", "page18"),
+        (b"\x06", "page18"),
+        (b"\x04", "page10"),
+        (b"\x06\x02", "page1"),
+        (b"\x1b[6~\x1b[5~", "page1"),
+        (b"\x04\x15", "page1"),
+    ]:
+        copied.unlink(missing_ok=True)
+        os.write(master, b"\x02[g" + keys + b"0v$y")
+        assert clipboard(lambda t: t == expected, ("copy-mode page keys", keys)) == expected
+
+    view("pane.focus", {"id": search["pane"]})
+    read_for(.5)
+    # The case of each match identifies its position, including two on one row.
+    for command, expected in [
+        (b"/hit\r", "hit"),
+        (b"/hit\rn", "HIT"),
+        (b"/hit\rnn", "Hit"),
+        (b"/hit\rnnn", "hit"),
+        (b"/hit\rN", "Hit"),
+        (b"G?hit\r", "Hit"),
+        (b"G?hit\rn", "HIT"),
+        (b"G?hit\rnN", "Hit"),
+        (b"/HIT\r", "HIT"),
+        (b"/hit\r?missing\x1b", "hit"),
+        (b"/hit\r/\r", "hit"),
+    ]:
+        copied.unlink(missing_ok=True)
+        os.write(master, b"\x02[g" + command)
+        read_for(.1)
+        os.write(master, b"y")
+        assert clipboard(lambda t: t == expected, ("copy-mode search", command)) == expected
+    # Clearing search leaves copy mode active; the next Esc returns to the program.
+    os.write(master, b"\x02[/missing\r\x1b")
+    read_for(.1)
+    os.write(master, b"\x1b")
+    read_for(.1)
+    view("pane.focus", {"id": pages["pane"]})
+    copied.unlink(missing_ok=True)
+    os.write(master, b"\x02[g\x04v\x06$y")
+    text = clipboard(lambda t: "page27" in t, "selection across a half and whole page")
+    assert text.splitlines()[0] == "page10" and text.splitlines()[-1] == "page27", text
+
     # Image paste: ctrl+v in a terminal on another machine puts the image there and pastes its path.
     remote_pane = do("space.new", {"name": "Far", "folder": str(remote.root), "argv": ["sh", "-c", "read path; cp \"$path\" " + str(remote.root / "received.png") + "; sleep 180"]}, machine="far")
     view("machine", {"machine": "far"})
@@ -115,7 +167,7 @@ try:
     os.close(master)
     os.close(slave)
     master = slave = None
-    print("PASS: double-click word, triple-click line, copy-mode selection across history pages, native clipboard writer, image paste to a remote terminal")
+    print("PASS: word/line selection, whole/half pages, bidirectional history search, smart case, match copying, native clipboard writer, remote image paste")
 
     # A program's copies must reach the host clipboard through either viewer.
     text = "Codex \u590d\u5236\nsecond line"

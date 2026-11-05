@@ -41,8 +41,10 @@ pub enum Mode {
 /// What the copy-mode bar reports.
 pub struct CopyBar {
     pub search_prompt: Option<String>,
+    pub search_backward: bool,
     pub query: String,
-    pub matched: bool,
+    pub matches: usize,
+    pub current_match: Option<usize>,
     pub selecting: bool,
 }
 

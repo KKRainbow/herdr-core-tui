@@ -12,6 +12,8 @@ pub fn terminal(
     palette: &Palette,
 ) {
     let selected = selection_style(palette);
+    let matched = Style::reset().fg(palette.text).bg(palette.surface1);
+    let current = Style::reset().fg(palette.contrast()).bg(palette.accent);
     let area = area.intersection(buffer.area);
     for (y, row) in snapshot.rows.iter().take(area.height as usize).enumerate() {
         self::row(
@@ -21,6 +23,19 @@ pub fn terminal(
             row,
             selection.map(|s| (s, selected)),
         );
+        if let Some(copy) = selection {
+            for (x, cell) in row.iter().take(area.width as usize).enumerate() {
+                if !copy.contains(x as u16, y as u16)
+                    && let Some(active) = copy.search_contains(x as u16, y as u16)
+                {
+                    let style = if active { current } else { matched };
+                    buffer[(area.x + x as u16, area.y + y as u16)].set_style(style);
+                    if cell.wide && x + 1 < area.width as usize {
+                        buffer[(area.x + x as u16 + 1, area.y + y as u16)].set_style(style);
+                    }
+                }
+            }
+        }
     }
 }
 /// One terminal row at `y` within `area`, which must lie inside the buffer.
@@ -96,6 +111,36 @@ fn selection_style(palette: &Palette) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_highlights_distinguish_the_current_match_and_explicit_selection() {
+        let area = Rect::new(0, 0, 20, 4);
+        let palette = Palette::default();
+        let mut vt = vt::Vt::new(area.width, area.height);
+        vt.write("界hit hit\r\nend".as_bytes());
+        let mut copy = Copy::new(vt.frame(), vt.top_row());
+        assert!(copy.search(&mut vt, "hit", false));
+        let mut buffer = Buffer::empty(area);
+        terminal(&mut buffer, area, &copy.frame, Some(&copy), &palette);
+        assert_eq!(buffer[(2, 0)].bg, palette.accent);
+        assert_eq!(buffer[(4, 0)].bg, palette.accent);
+        assert_eq!(buffer[(6, 0)].bg, palette.surface1);
+        assert_eq!(buffer[(8, 0)].bg, palette.surface1);
+        assert_eq!(buffer[(5, 0)].bg, Color::Reset);
+
+        copy.selecting = true;
+        copy.anchor = (6, 0);
+        copy.cursor = (8, 0);
+        terminal(&mut buffer, area, &copy.frame, Some(&copy), &palette);
+        assert_eq!(buffer[(6, 0)].bg, selection_style(&palette).bg.unwrap());
+        assert_eq!(buffer[(2, 0)].bg, palette.accent);
+
+        copy.selecting = false;
+        assert!(copy.search(&mut vt, "界", false));
+        terminal(&mut buffer, area, &copy.frame, Some(&copy), &palette);
+        assert_eq!(buffer[(0, 0)].bg, palette.accent);
+        assert_eq!(buffer[(1, 0)].bg, palette.accent);
+    }
 
     #[test]
     fn terminal_colors_preserve_host_palette_and_program_overrides() {

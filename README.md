@@ -24,6 +24,15 @@ Detaching leaves shared terminal programs running.
 A new session opens a workspace in the folder where the TUI starts, as Herdr does.
 A session whose workspaces were all closed stays empty.
 
+## Library
+
+Embed the same client with `herdr_tui::run(args, core_environment).await`.
+`args` contains the CLI arguments without the executable name, and
+`core_environment` supplies environment overrides to the `hc` transport, such as
+`HC_SOCKET`. The caller provides the Tokio runtime; the standalone binary uses a
+current-thread runtime. Help, headless commands, and both interactive views use
+the same entry point.
+
 ## Interface
 
 The interface follows Herdr: a sidebar with spaces above and agents below, a tab bar above the panes, and Herdr's menus, prompts, and mode bar.

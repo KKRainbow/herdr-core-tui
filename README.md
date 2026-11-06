@@ -33,6 +33,16 @@ Embed the same client with `herdr_tui::run(args, core_environment).await`.
 current-thread runtime. Help, headless commands, and both interactive views use
 the same entry point.
 
+Hosts that provide message submission can use
+`herdr_tui::run_with_composer(args, core_environment, Some(composer)).await`.
+Construct `Composer::new(title, |id, text| async move { ... })`; the callback returns
+receipt text or an error. Scope the numeric ID to this viewer. Unchanged retries
+keep the ID, edits and successful submissions advance it. The TUI knows no host
+API, source schema or credentials. Submission runs alongside terminal events.
+The optional editor opens with prefix+m: Enter inserts a newline, Ctrl+S submits,
+and Escape returns to the native terminal while keeping the draft in this viewer.
+With no composer, the standalone controls and native terminal input stay the same.
+
 ## Interface
 
 The interface follows Herdr: a sidebar with spaces above and agents below, a tab bar above the panes, and Herdr's menus, prompts, and mode bar.

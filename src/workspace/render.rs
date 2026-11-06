@@ -46,6 +46,7 @@ impl Workspace {
         let size = screen.size()?;
         let area = Rect::new(0, 0, size.width, size.height);
         let covered = self.overlay.is_some()
+            || self.composer.as_ref().is_some_and(|c| c.visible)
             || self.toast.is_some()
             || self.copy_search.is_some()
             || self.drag.is_some()
@@ -406,6 +407,11 @@ impl Workspace {
                 toast.error,
                 &palette,
             );
+        }
+        if let Some(composer) = &self.composer
+            && composer.visible
+        {
+            cursor = composer.render(buffer, &palette);
         }
         cursor
     }

@@ -1,6 +1,7 @@
 mod actions;
 mod cli;
 mod clipboard;
+mod composer;
 mod config_edit;
 mod connection;
 mod control;
@@ -33,6 +34,7 @@ use std::{
     time::Duration,
 };
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub use composer::Composer;
 /// Herdr's `ui.mouse_capture`: when off, the host terminal keeps its own mouse handling.
 pub static MOUSE_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 struct Host;
@@ -103,6 +105,15 @@ impl Drop for Host {
     }
 }
 pub async fn run(args: Vec<String>, core_environment: BTreeMap<String, String>) -> Result<()> {
+    run_with_composer(args, core_environment, None).await
+}
+
+/// Runs the workspace with an optional host message composer (prefix, then m).
+pub async fn run_with_composer(
+    args: Vec<String>,
+    core_environment: BTreeMap<String, String>,
+    composer: Option<Composer>,
+) -> Result<()> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{}", cli::HELP);
         return Ok(());
@@ -131,6 +142,7 @@ pub async fn run(args: Vec<String>, core_environment: BTreeMap<String, String>) 
             options.instance,
             display,
             interrupt,
+            composer,
         )
         .await;
     }

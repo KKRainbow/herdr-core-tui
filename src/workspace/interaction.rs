@@ -24,6 +24,11 @@ fn contains(rect: Rect, column: u16, row: u16) -> bool {
 
 impl Workspace {
     pub(super) async fn host(&mut self, event: Event) -> Result<bool> {
+        if let Some(composer) = &mut self.composer
+            && composer.handle(&event)
+        {
+            return Ok(false);
+        }
         match event {
             Event::Key(key) => self.key(key).await,
             Event::Mouse(mouse) => self.mouse(mouse).await,
@@ -187,6 +192,13 @@ impl Workspace {
                 }
                 if self.keys.is_prefix(&key) {
                     self.forward_key(key)?;
+                    return Ok(false);
+                }
+                if key.code == KeyCode::Char('m')
+                    && key.modifiers.is_empty()
+                    && let Some(composer) = &mut self.composer
+                {
+                    composer.open();
                     return Ok(false);
                 }
                 if let Some(action) = self.keys.prefixed(&key) {

@@ -177,6 +177,7 @@ pub struct Workspace {
     copy_search: Option<CopySearch>,
     notice: String,
     toast: Option<Toast>,
+    composer: Option<crate::Composer>,
 }
 impl Workspace {
     fn view(&self) -> View {
@@ -1009,6 +1010,7 @@ pub async fn run(
     instance: Option<String>,
     display: Value,
     mut interrupt: impl Future<Output = io::Result<()>> + Unpin,
+    composer: Option<crate::Composer>,
 ) -> Result<()> {
     let instance = instance.unwrap_or_else(|| format!("tui-{}", std::process::id()));
     let mut endpoint = crate::control::Endpoint::bind(&config.session, &instance)?;
@@ -1089,6 +1091,7 @@ pub async fn run(
         copy_search: None,
         notice: format!("Instance {instance}"),
         toast: None,
+        composer,
     };
     if !app.session.documents.contains_key(&app.machine) {
         app.session.refresh(&app.machine).await;
@@ -1174,10 +1177,17 @@ pub async fn run(
             Paint,
             Control(crate::control::Request),
             Git(git::Update),
+            Composed(std::result::Result<String, String>),
         }
         let next = tokio::select! {
         _=&mut interrupt=>break,
         event=events.next()=>Next::Host(event),
+        result=async {
+            match &mut app.composer {
+                Some(composer) => composer.next().await,
+                None => std::future::pending().await,
+            }
+        }=>Next::Composed(result),
         Some(request)=endpoint.requests.recv()=>Next::Control(request),
         output=next_output(&mut app.surfaces)=>Next::Output(output.0,output.1),
         update=app.git_poller.next(),if connected=>Next::Git(update),
@@ -1202,6 +1212,13 @@ pub async fn run(
             _ => {}
         }
         match next {
+            Next::Composed(result) => {
+                match result {
+                    Ok(receipt) => app.toast(receipt, false),
+                    Err(error) => app.toast(error, true),
+                }
+                dirty = true;
+            }
             Next::Git(update) => {
                 if app.session.document_ref(&app.machine).is_err() {
                     app.invalidate_git();

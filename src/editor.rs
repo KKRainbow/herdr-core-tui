@@ -9,6 +9,7 @@ pub struct TextEditor {
     cursor: usize,
     replace_on_type: bool,
     killed: String,
+    multiline: bool,
 }
 
 impl std::ops::Deref for TextEditor {
@@ -31,6 +32,13 @@ impl From<&str> for TextEditor {
 }
 
 impl TextEditor {
+    pub fn multiline() -> Self {
+        Self {
+            multiline: true,
+            ..Self::default()
+        }
+    }
+
     pub fn new(text: &str, replace_on_type: bool) -> Self {
         let mut editor = Self::default();
         editor.insert(text);
@@ -76,8 +84,9 @@ impl TextEditor {
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
-                    normalized.push(' ');
+                    normalized.push(if self.multiline { '\n' } else { ' ' });
                 }
+                '\n' | '\t' if self.multiline => normalized.push(ch),
                 '\n' | '\t' => normalized.push(' '),
                 ch if !ch.is_control() => normalized.push(ch),
                 _ => {}
@@ -165,8 +174,48 @@ impl TextEditor {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        if key.code == KeyCode::Enter && self.multiline {
+            return Some(self.insert("\n"));
+        }
         if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
             return None;
+        }
+        if self.multiline && key.modifiers.is_empty() {
+            let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+            let end = self.text[self.cursor..]
+                .find('\n')
+                .map_or(self.text.len(), |i| self.cursor + i);
+            let target = match key.code {
+                KeyCode::Home => Some(start),
+                KeyCode::End => Some(end),
+                KeyCode::Up | KeyCode::Down => {
+                    let column = self.text[start..self.cursor].graphemes(true).count();
+                    let line = if key.code == KeyCode::Up && start > 0 {
+                        let previous = self.text[..start - 1].rfind('\n').map_or(0, |i| i + 1);
+                        Some((previous, start - 1))
+                    } else if key.code == KeyCode::Down && end < self.text.len() {
+                        let next_end = self.text[end + 1..]
+                            .find('\n')
+                            .map_or(self.text.len(), |i| end + 1 + i);
+                        Some((end + 1, next_end))
+                    } else {
+                        None
+                    };
+                    line.map(|(a, b)| {
+                        a + self.text[a..b]
+                            .graphemes(true)
+                            .take(column)
+                            .map(str::len)
+                            .sum::<usize>()
+                    })
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.cursor = target;
+                self.replace_on_type = false;
+                return Some(false);
+            }
         }
         let previous_len = self.text.len();
         let mut content_changed = false;
@@ -256,6 +305,41 @@ impl TextEditor {
         }
         (&self.text[start..end], cells as u16)
     }
+
+    pub fn multiline_viewport(&self, width: u16, height: u16) -> (Vec<String>, (u16, u16)) {
+        let prefix = &self.text[..self.cursor];
+        let row = prefix.bytes().filter(|b| *b == b'\n').count();
+        let column = prefix
+            .rsplit('\n')
+            .next()
+            .unwrap_or("")
+            .replace('\t', "    ")
+            .width();
+        let left = column.saturating_sub(usize::from(width.saturating_sub(1)));
+        let top = row.saturating_sub(usize::from(height.saturating_sub(1)));
+        let lines = self
+            .text
+            .split('\n')
+            .skip(top)
+            .take(usize::from(height))
+            .map(|line| {
+                let expanded = line.replace('\t', "    ");
+                let mut cells = 0;
+                let mut visible = String::new();
+                for grapheme in expanded.graphemes(true) {
+                    let end = cells + grapheme.width();
+                    if cells >= left && end <= left + usize::from(width) {
+                        visible.push_str(grapheme);
+                    } else if cells < left && end > left {
+                        visible.push_str(&" ".repeat(end - left));
+                    }
+                    cells = end;
+                }
+                visible
+            })
+            .collect();
+        (lines, ((column - left) as u16, (row - top) as u16))
+    }
 }
 
 #[cfg(test)]
@@ -276,5 +360,24 @@ mod tests {
         editor.insert("a");
         assert_eq!(editor.as_str(), "a界");
         assert_eq!(editor.viewport(2), ("a", 1));
+    }
+
+    #[test]
+    fn multiline_editing_retains_whitespace_and_moves_between_lines() {
+        use crossterm::event::KeyEvent;
+        let mut editor = TextEditor::multiline();
+        let raw = "  hello\n\t\u{754c}e\u{301}  \n";
+        editor.insert(raw);
+        assert_eq!(editor.as_str(), raw);
+        editor.handle_key(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        editor.handle_key(&KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        editor.handle_key(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(editor.as_str(), "  hello\n\t\u{754c}e\u{301} \n");
+        editor.handle_key(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        editor.handle_key(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(editor.as_str(), "  hello\n\t\u{754c}\n");
+        let (lines, cursor) = editor.multiline_viewport(5, 2);
+        assert_eq!(cursor, (4, 1));
+        assert_eq!(lines[1], "  \u{754c}");
     }
 }

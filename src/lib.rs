@@ -34,7 +34,7 @@ use std::{
     time::Duration,
 };
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-pub use composer::Composer;
+pub use composer::{Composer, ComposerMessage};
 /// Herdr's `ui.mouse_capture`: when off, the host terminal keeps its own mouse handling.
 pub static MOUSE_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 struct Host;

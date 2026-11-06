@@ -43,6 +43,16 @@ The optional editor opens with prefix+m: Enter inserts a newline, Ctrl+S submits
 and Escape returns to the native terminal while keeping the draft in this viewer.
 With no composer, the standalone controls and native terminal input stay the same.
 
+To display host messages, add
+`.with_messages(tokio::sync::mpsc::Receiver<ComposerMessage>)`.
+Each `ComposerMessage` has a `title` and `text`. The host chooses and retains
+durable messages; the TUI does not read native output into this feed.
+Messages arrive while the editor is hidden or a submission is pending.
+Open prefix+m to read them above the draft; PageUp and PageDown scroll the wrapped
+history. This viewer retains at most 100 messages and 256 KiB, truncating individual
+messages above 64 KiB for display. A new viewer can receive history again from its
+host.
+
 ## Interface
 
 The interface follows Herdr: a sidebar with spaces above and agents below, a tab bar above the panes, and Herdr's menus, prompts, and mode bar.

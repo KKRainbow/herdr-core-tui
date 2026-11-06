@@ -408,7 +408,7 @@ impl Workspace {
                 &palette,
             );
         }
-        if let Some(composer) = &self.composer
+        if let Some(composer) = &mut self.composer
             && composer.visible
         {
             cursor = composer.render(buffer, &palette);

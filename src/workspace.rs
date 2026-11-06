@@ -1177,7 +1177,7 @@ pub async fn run(
             Paint,
             Control(crate::control::Request),
             Git(git::Update),
-            Composed(std::result::Result<String, String>),
+            Composed(Option<std::result::Result<String, String>>),
         }
         let next = tokio::select! {
         _=&mut interrupt=>break,
@@ -1214,8 +1214,9 @@ pub async fn run(
         match next {
             Next::Composed(result) => {
                 match result {
-                    Ok(receipt) => app.toast(receipt, false),
-                    Err(error) => app.toast(error, true),
+                    Some(Ok(receipt)) => app.toast(receipt, false),
+                    Some(Err(error)) => app.toast(error, true),
+                    None => {}
                 }
                 dirty = true;
             }

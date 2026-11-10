@@ -27,7 +27,8 @@ with tempfile.TemporaryDirectory(prefix="herdr-source-")as scratch:
     extract(repo/"vendor/ghostty",ghostty,root/"vendor/ghostty")
     extract(client,pin,root/"vendor/herdr-client-lib")
     manifest=root/"Cargo.toml"
-    manifest.write_text(manifest.read_text().replace('path = "../herdr-client-lib"','path = "vendor/herdr-client-lib"'))
+    dependency=next(line for line in manifest.read_text().splitlines() if line.startswith("herdr-client-lib = "))
+    manifest.write_text(manifest.read_text().replace(dependency,'herdr-client-lib = { path = "vendor/herdr-client-lib" }'))
     # A vendored package must not accidentally join the TUI workspace.
     text=manifest.read_text().replace('[workspace]\n','[workspace]\nexclude = ["vendor/herdr-client-lib"]\n')
     manifest.write_text(text)

@@ -16,7 +16,7 @@ publish.workspace = true
 rust-version = "1.89"
 
 [dependencies]
-herdr-client-lib = { path = "../herdr-client-lib" }
+herdr-client-lib = { git = "https://github.com/nick1udwig/herdr-client-lib.git", rev = "60a1bed82b92e4bbc537b7cffef771ed1912e54f" }
 ghostty-sys = { path = "crates/ghostty-sys" }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = "0.29"

@@ -8,7 +8,7 @@ The TUI keeps focus, zoom, selection, and preferences private.
 
 Use Rust, libclang, and Zig 0.16.
 Run `git submodule update --init` to obtain the pinned Ghostty source.
-Keep `herdr-client-lib` beside this repository for development.
+Cargo fetches the pinned `herdr-client-lib` revision from Git.
 Set `ZIG` if Zig is not on PATH.
 Run `just check` and `just build`.
 
@@ -220,5 +220,5 @@ Run `just package /path/herdr-tui-source.tar.gz` to export the staged source tre
 The source bundle needs no sibling checkout and already includes its submodules.
 Run `just package-check` to export the staged source, verify its library path, and build and test it in a temporary directory.
 `distribution/client-revision` selects the library revision; `SOURCE-REVISIONS` records the bundle inputs.
-The development checkout keeps its sibling path dependency.
+Packaging requires a sibling `herdr-client-lib` checkout; ordinary builds do not.
 Nothing is published or pushed by these recipes.
